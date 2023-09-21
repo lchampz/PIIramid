@@ -13,8 +13,16 @@ int main(void) {
 		{
 			case 0:
 				result = menu(&sys);
-				if (sys.record) count = 3;
-				if (sys.configuration) count = 4;
+				if (sys.record) //count = 3;
+				if (sys.configuration) //count = 4;
+			break;
+			case 3:
+				printf("record!");
+				count = 0;
+			break;
+			case 4: 
+				printf("config!");
+				count = 0;
 			break;
 		};
 	} while (sys.running && result == 0);

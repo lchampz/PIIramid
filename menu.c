@@ -56,11 +56,9 @@ int menu(System* sys) {
 			mouse.X = event.mouse.x;
 			mouse.Y = event.mouse.y;
 
-			btnPlay.isHover = btnPlay.coordenades.X < mouse.X < btnPlay.limit.X&& btnPlay.coordenades.Y < mouse.Y < btnPlay.limit.Y;
-			btnRecord.isHover = btnRecord.coordenades.X < mouse.X < btnRecord.limit.X&& btnRecord.coordenades.Y < mouse.Y < btnRecord.limit.Y;
-			btnConfig.isHover = btnConfig.coordenades.X < mouse.X < btnConfig.limit.X&& btnConfig.coordenades.Y < mouse.Y < btnConfig.limit.Y;
-
-			if (btnPlay.isHover == YES) printf("x = %d, y= %d\n\n mouseX = %d, mouseY = %d\n\nmouseX+200 = %d, mouseY=87 = %d\n\n", btnPlay.coordenades.X, btnPlay.coordenades.Y, mouse.X, mouse.Y, btnPlay.limit.X, btnPlay.limit.Y);
+			btnPlay.isHover = ((btnPlay.coordenades.X < mouse.X) && (mouse.X < btnPlay.limit.X)) && ((btnPlay.coordenades.Y < mouse.Y) && (mouse.Y < btnPlay.limit.Y));
+			btnRecord.isHover = ((btnRecord.coordenades.X < mouse.X) && (mouse.X < btnRecord.limit.X)) && ((btnRecord.coordenades.Y < mouse.Y) && (mouse.Y < btnRecord.limit.Y));
+			btnConfig.isHover = ((btnConfig.coordenades.X < mouse.X) && (mouse.X < btnConfig.limit.X)) && ((btnConfig.coordenades.Y < mouse.Y) && (mouse.Y < btnConfig.limit.Y));
 			break;
 		case ALLEGRO_EVENT_MOUSE_BUTTON_DOWN:
 			mouse.X = event.mouse.x;
@@ -70,9 +68,12 @@ int menu(System* sys) {
 				if (btnPlay.isHover) return 0;
 				if (btnRecord.isHover) {
 					sys->record = YES;
-					printf("record = %d", sys->record);
+					printf("record = %d\n", sys->record);
 				}
-				if (btnConfig.isHover) sys->configuration = YES;
+				if (btnConfig.isHover) {
+					sys->configuration = YES;
+					printf("configuration = %d\n", sys->configuration);
+				}
 			}
 
 		}
@@ -89,13 +90,13 @@ int menu(System* sys) {
 			al_draw_bitmap(btnRecord.bitmap, btnRecord.coordenades.X, btnRecord.coordenades.Y, 0);
 			al_draw_bitmap(btnConfig.bitmap, btnConfig.coordenades.X, btnConfig.coordenades.Y, 0);
 
-			if (!btnPlay.isHover) al_draw_text(btnPlay.font, HOVER_WHITE, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
+			if (btnPlay.isHover) al_draw_text(btnPlay.font, HOVER_WHITE, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
 			else al_draw_text(btnPlay.font, HOVER_BLACK, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
 
-			if (!btnRecord.isHover) al_draw_text(btnRecord.font, HOVER_WHITE, btnRecord.coordenades.X + 48, btnRecord.coordenades.Y + 30, 0, btnRecord.placeholder);
+			if (btnRecord.isHover) al_draw_text(btnRecord.font, HOVER_WHITE, btnRecord.coordenades.X + 48, btnRecord.coordenades.Y + 30, 0, btnRecord.placeholder);
 			else al_draw_text(btnRecord.font, HOVER_BLACK, btnRecord.coordenades.X + 48, btnRecord.coordenades.Y + 30, 0, btnRecord.placeholder);
 
-			if (!btnConfig.isHover) al_draw_text(btnConfig.font, HOVER_WHITE, btnConfig.coordenades.X + 48, btnConfig.coordenades.Y + 30, 0, btnConfig.placeholder);
+			if (btnConfig.isHover) al_draw_text(btnConfig.font, HOVER_WHITE, btnConfig.coordenades.X + 48, btnConfig.coordenades.Y + 30, 0, btnConfig.placeholder);
 			else al_draw_text(btnConfig.font, HOVER_BLACK, btnConfig.coordenades.X + 48, btnConfig.coordenades.Y + 30, 0, btnConfig.placeholder);
 
 			al_flip_display();

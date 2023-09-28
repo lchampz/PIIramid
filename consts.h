@@ -9,6 +9,9 @@
 #define HOVER_BLACK al_map_rgb(92, 51, 23)
 #define HOVER_WHITE al_map_rgb(255,255, 255)
 
+#define SPRITE_CHAR_W 102 
+#define SPRITE_CHAR_H 152
+
 typedef struct {
 	int X;
 	int Y;

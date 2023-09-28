@@ -30,6 +30,7 @@ System init() {
 	if (sys.error == YES) return sys;
 
 	sys.menu = NO;
+	sys.battle = NO;
 	sys.configuration = NO;
 	sys.record = NO;
 

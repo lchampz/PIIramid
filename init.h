@@ -17,6 +17,7 @@ typedef struct {
 	ALLEGRO_FONT* font;
 	bool menu;
 	bool record;
+	bool battle;
 	bool configuration;
 	bool running;
 	bool error;

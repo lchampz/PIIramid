@@ -19,6 +19,12 @@
     <Filter Include="Source Files\game">
       <UniqueIdentifier>{8487888f-40e5-407b-883c-c66736b23a6a}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\entity">
+      <UniqueIdentifier>{411685d0-402a-46d1-80f1-f127afe7e3e8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\battle">
+      <UniqueIdentifier>{ce6e401f-5d51-4c35-be43-84b8c830b540}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -36,6 +42,12 @@
     <ClCompile Include="game.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="entity.c">
+      <Filter>Source Files\entity</Filter>
+    </ClCompile>
+    <ClCompile Include="battle.c">
+      <Filter>Source Files\battle</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="init.h">
@@ -46,6 +58,9 @@
     </ClInclude>
     <ClInclude Include="game.h">
       <Filter>Source Files\game</Filter>
+    </ClInclude>
+    <ClInclude Include="entity.h">
+      <Filter>Source Files\entity</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

@@ -40,7 +40,7 @@ int menu(System* sys) {
 
 	Coordenades mouse = {.X = 0, .Y = 0};
 
-	while (sys->running && !finished && !sys->error) {
+	while (sys->running && !finished && !sys->error && !sys->battle && !sys->configuration && !sys->record) {
 		ALLEGRO_EVENT event;
 
 		al_wait_for_event(sys->queue, &event);
@@ -65,15 +65,9 @@ int menu(System* sys) {
 			mouse.Y = event.mouse.y;
 
 			if (event.mouse.button & 1) {
-				if (btnPlay.isHover) return 0;
-				if (btnRecord.isHover) {
-					sys->record = YES;
-					printf("record = %d\n", sys->record);
-				}
-				if (btnConfig.isHover) {
-					sys->configuration = YES;
-					printf("configuration = %d\n", sys->configuration);
-				}
+				if (btnPlay.isHover) sys->battle = YES;
+				if (btnRecord.isHover) sys->record = YES;
+				if (btnConfig.isHover) sys->configuration = YES;	
 			}
 
 		}

@@ -21,6 +21,7 @@ typedef struct{
 	int columns;
 	int rows;
 	char path[30];
+	ALLEGRO_BITMAP* refinedMap;
 	bool finish;
 } Map;
 

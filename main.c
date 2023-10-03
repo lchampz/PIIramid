@@ -29,7 +29,6 @@ int main(void) {
 				count = 0;
 			break;
 			case 3: 
-				printf("entrou");
 				do {
 					result = battle(&sys);
 					if (result) {

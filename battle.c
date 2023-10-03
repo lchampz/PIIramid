@@ -24,6 +24,7 @@ int battle(System* sys) {
 	btnPlay.limit.Y = btnPlay.coordenades.Y + al_get_bitmap_height(btnPlay.bitmap);
 
 	Coordenades mouse = { .X = 0, .Y = 0 };
+	Map map = { .path = "./assets/map.txt", .finish = NO};
 
 	init_entity(&player, playerSprite, sys->display, YES);
 	init_entity(&enemies, enemySprite, sys->display, NO);
@@ -99,11 +100,10 @@ int battle(System* sys) {
 
 		if (draw && al_is_event_queue_empty(sys->queue)) {
 			draw = NO;
+			al_clear_to_color(HOVER_BLACK);
 
 			if (intro) {
-				al_clear_to_color(al_map_rgb(0, 0, 0));
-				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 200, 200, 0, "Voce");
-				
+				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 200, 200, 0, "teste");
 
 				al_draw_bitmap(btnPlay.bitmap, btnPlay.coordenades.X, btnPlay.coordenades.Y, 0);
 				if (btnPlay.isHover) al_draw_text(btnPlay.font, HOVER_WHITE, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
@@ -120,11 +120,13 @@ int battle(System* sys) {
 				al_draw_filled_rectangle(100, 20, player.lifePoints + 100, 40, al_map_rgb(0, 255, 0));
 
 			}
+			if (!map.finish) init_map(&map);
 			
 			al_flip_display();
 		}
 	}
 	destroy_entity(&enemies);
+	destroyBtn(btnPlay);
 	destroy_entity(&player);
 	al_destroy_bitmap(bg);
 

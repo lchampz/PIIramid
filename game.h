@@ -17,27 +17,30 @@ typedef struct {
 	ALLEGRO_BITMAP* bitmap;
 } Button;
 
-typedef struct{
-	int columns;
-	int rows;
-	char path[30];
-	ALLEGRO_BITMAP* refinedMap;
-	bool finish;
-} Map;
-
 typedef struct {
-	char name[15];
 	bool hasColision;
 	int type;
-	
+
 	Coordenades position;
 
 	ALLEGRO_BITMAP* path;
 } Tile;
 
+typedef struct{
+	int columns;
+	int rows;
+	char path[30];
+	Tile** tileArr;
+	ALLEGRO_BITMAP*** refinedMap;
+	bool finish;
+	bool error;
+	int stage;
+} Map;
+
 //map
-bool init_map(Map* map);
+void init_map(Map* map);
 bool load_tile(Tile* tile);
+void draw_map(Map* map);
 
 
 //pages
@@ -48,3 +51,7 @@ int over(System* sys);
 
 //destroyers
 void destroyBtn(Button btn);
+
+
+//utils
+int binarySearch(int arr[], int num, int left, int right);

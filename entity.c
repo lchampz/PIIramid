@@ -1,4 +1,5 @@
 #include "entity.h"
+#include "game.h"
 #include <stdio.h>
 
 void init_entity(Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* display, bool player) {
@@ -16,7 +17,7 @@ void init_entity(Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* displa
 		entity->hitbox.Y = 0;
 	}
 	entity->sprite = sprite;
-	entity->speed = 2;
+	entity->speed = 5;
 	entity->position.X = al_get_display_width(display) / 2 - entity->hitbox.X / 2;
 	entity->position.Y = al_get_display_width(display) / 2 - entity->hitbox.Y / 2;
 	entity->frameDelay = 8;
@@ -25,8 +26,22 @@ void init_entity(Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* displa
 	entity->animation = IDLE;
 }
 
-void move_entity(Entity* entity) {
-	if (entity->isMoving == YES) {
+void checkColision(Entity entity, Map map) {
+	Coordenades colision = { .X = NO, .Y = NO };
+	int index = 0;
+	
+	for (int i = 0; map.rows > i; i++) {
+		for (int j = 0; map.columns > j; j++) {
+			if (map.tileArr[i][j].hasColision) {
+				if(map.tileArr[i][j].position.X == entity.position.X || map.tileArr[i][j].position.Y == entity.position.Y)
+					printf("Colidiu com o bloco [%d][%d]\n", i, j);
+			}
+		}
+	}
+}
+
+void move_entity(Entity* entity, Map map) {
+	if (entity->isMoving == YES ) {
 		entity->animation = RUNNING;
 		switch (entity->move)
 		{
@@ -52,7 +67,7 @@ void move_entity(Entity* entity) {
 		}
 	}
 	else entity->animation = IDLE;
-	
+	if (map.finish) checkColision(*entity, map);
 }
 
 void draw_entity(Entity* entity) {

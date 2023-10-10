@@ -24,7 +24,7 @@ int battle(System* sys) {
 	btnPlay.limit.Y = btnPlay.coordenades.Y + al_get_bitmap_height(btnPlay.bitmap);
 
 	Coordenades mouse = { .X = 0, .Y = 0 };
-	Map map = { .path = "./assets/map.txt", .finish = NO};
+	Map map = { .path = "./assets/map.txt", .finish = NO, .error = NO};
 
 	init_entity(&player, playerSprite, sys->display, YES);
 	init_entity(&enemies, enemySprite, sys->display, NO);
@@ -36,8 +36,7 @@ int battle(System* sys) {
 
 		if (event.type == ALLEGRO_EVENT_TIMER) {
 			draw = YES;
-
-			move_entity(&player);
+			move_entity(&player, map);
 		}
 
 		if (++player.countFrame >= player.frameDelay) {
@@ -102,6 +101,9 @@ int battle(System* sys) {
 			draw = NO;
 			al_clear_to_color(HOVER_BLACK);
 
+			if (!map.finish && !map.error) init_map(&map);
+			if (!map.error) draw_map(&map);
+
 			if (intro) {
 				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 200, 200, 0, "teste");
 
@@ -110,7 +112,7 @@ int battle(System* sys) {
 				else al_draw_text(btnPlay.font, HOVER_BLACK, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
 			}
 			else {
-				al_draw_bitmap(bg, 0, 0, 0);
+				//al_draw_bitmap(bg, 0, 0, 0);
 
 				draw_entity(&player);
 
@@ -120,7 +122,7 @@ int battle(System* sys) {
 				al_draw_filled_rectangle(100, 20, player.lifePoints + 100, 40, al_map_rgb(0, 255, 0));
 
 			}
-			if (!map.finish) init_map(&map);
+			
 			
 			al_flip_display();
 		}

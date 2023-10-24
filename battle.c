@@ -5,6 +5,7 @@ int battle(System* sys) {
 	bool finished = NO;
 	bool draw = YES;
 	bool intro = NO;
+	sys->confront = NO;
 
 	Entity player;
 	Entity enemies;
@@ -27,7 +28,11 @@ int battle(System* sys) {
 	Map map = { .path = "./assets/map.txt", .finish = NO, .error = NO};
 
 	init_entity(&player, playerSprite, sys->display, YES);
-	init_entity(&enemies, enemySprite, sys->display, NO);
+	init_entity(&enemies, enemySprite, sys->display, YES);
+
+	enemies.position.X = 800;
+	enemies.position.Y = 300;
+	enemies.speed = 2;
 
 	while (player.alive && sys->running && !finished && !sys->error) {
 		ALLEGRO_EVENT event;
@@ -37,12 +42,20 @@ int battle(System* sys) {
 		if (event.type == ALLEGRO_EVENT_TIMER) {
 			draw = YES;
 			move_entity(&player, map);
+			move_entity(&enemies, map);
+			sys->confront = check_entity_colision(player, enemies);
 		}
 
 		if (++player.countFrame >= player.frameDelay) {
 			player.frame++;
 			if (player.frame >= 4) player.frame = 0;
 			player.countFrame = 0;
+		}
+
+		if (++enemies.countFrame >= enemies.frameDelay) {
+			enemies.frame++;
+			if (enemies.frame >= 4) enemies.frame = 0;
+			enemies.countFrame = 0;
 		}
 
 		switch (event.type) {
@@ -56,31 +69,26 @@ int battle(System* sys) {
 				case ALLEGRO_KEY_UP:
 					player.move = UP;
 					player.isMoving = YES;
-					printf("UP\n");
 				break;
 				case ALLEGRO_KEY_S:
 				case ALLEGRO_KEY_DOWN:
 					player.move = DOWN;
 					player.isMoving = YES;
-					printf("DOWN\n");
 				break;
 				case ALLEGRO_KEY_A:
 				case ALLEGRO_KEY_LEFT:
 					player.move = LEFT;
 					player.isMoving = YES;
-					printf("LEFT\n");
 				break;
 				case ALLEGRO_KEY_D:
 				case ALLEGRO_KEY_RIGHT:
 					player.move = RIGHT;
 					player.isMoving = YES;
-					printf("RIGHT\n");
 				break;
 			}
 		break;
 		case ALLEGRO_EVENT_KEY_UP:
 			player.isMoving = NO;
-			printf("Cancelando\n");
 		break;
 		case ALLEGRO_EVENT_MOUSE_AXES:
 			mouse.X = event.mouse.x;
@@ -92,9 +100,16 @@ int battle(System* sys) {
 			mouse.X = event.mouse.x;
 			mouse.Y = event.mouse.y;
 
-			if (event.mouse.button & 1) {
+			if (event.mouse.button &  1) {
 				if (btnPlay.isHover) intro = NO;
 			}
+		}
+
+		enemies.isMoving = YES;
+
+		if (enemies.colision.Y) {
+			if (enemies.move == UP) enemies.move = DOWN;
+			else enemies.move = UP;
 		}
 
 		if (draw && al_is_event_queue_empty(sys->queue)) {
@@ -111,16 +126,16 @@ int battle(System* sys) {
 				if (btnPlay.isHover) al_draw_text(btnPlay.font, HOVER_WHITE, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
 				else al_draw_text(btnPlay.font, HOVER_BLACK, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
 			}
+			if (sys->confront) confront(sys, &player, &enemies);
 			else {
-				//al_draw_bitmap(bg, 0, 0, 0);
-
-				draw_entity(&player);
+				
+				if (player.alive) draw_entity(&player);
+				if (enemies.alive) draw_entity(&enemies);
 
 				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 20, 20, 0, "Vida: ");
 				al_draw_rectangle(100, 20, 220, 40, al_map_rgb(0, 255, 0), 2);
 
 				al_draw_filled_rectangle(100, 20, player.lifePoints + 100, 40, al_map_rgb(0, 255, 0));
-
 			}
 			
 			

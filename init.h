@@ -8,6 +8,7 @@
 #include <allegro5\allegro_ttf.h>
 #include <allegro5\allegro_primitives.h>
 #include "consts.h"
+#include "game.h"
 
 
 typedef struct {
@@ -19,6 +20,7 @@ typedef struct {
 	bool record;
 	bool battle;
 	bool configuration;
+	bool confront;
 	bool running;
 	bool error;
 } System;

@@ -145,6 +145,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="battle.c" />
+    <ClCompile Include="confront.c" />
     <ClCompile Include="entity.c" />
     <ClCompile Include="game.c" />
     <ClCompile Include="init.c" />

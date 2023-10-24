@@ -48,6 +48,9 @@
     <ClCompile Include="battle.c">
       <Filter>Source Files\battle</Filter>
     </ClCompile>
+    <ClCompile Include="confront.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="init.h">

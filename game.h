@@ -1,5 +1,6 @@
 #pragma once
 #include "init.h"
+#include "entity.h"
 
 enum Estructures {
 	FLOOR, WALL
@@ -39,15 +40,16 @@ typedef struct{
 
 //map
 void init_map(Map* map);
-bool load_tile(Tile* tile);
 void draw_map(Map* map);
 
 
 //pages
 int menu(System* sys);
-int explain(System* sys);
+//int explain(System* sys);
 int battle(System* sys);
-int over(System* sys); 
+void confront(System* sys, Entity *player, Entity *enemy);
+//int over(System* sys); 
+
 
 //destroyers
 void destroyBtn(Button btn);

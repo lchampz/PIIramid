@@ -88,7 +88,7 @@ void init_map(Map* map) {
 		map->finish = YES;
 		printf("[ERRO] Falha em abrir o arquivo!\n");
 		map->error = YES;
-		return NO;
+		return;
 	}
 
 	printf("[LOG] lendo linha e coluna...\n");
@@ -132,7 +132,6 @@ void init_map(Map* map) {
 	for (int i = 0; matrix.row > i; i++) {
 			for (int j = 0; matrix.column > j; j++) {
 				c = fgetc(arq);
-				printf("posicao[%d][%d] = %c\n", i, j, c);
 				if (c != ' ' && c != "\n" && c != EOF) arr[i][j] = asciiNumbers(c);
 				else break;
 			}
@@ -178,3 +177,4 @@ void init_map(Map* map) {
 	fclose(arq);
 	map->finish = YES;
 }
+

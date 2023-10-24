@@ -31,11 +31,10 @@ int main(void) {
 			case 3: 
 				do {
 					result = battle(&sys);
-					if (result) {
-						result = 0;
-					}
+					if (result) result = 0;
 				} while (result && sys.running && !sys.menu);
 			break;
+		
 		};
 	} while (sys.running && result == 0);
 }

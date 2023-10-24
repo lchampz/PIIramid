@@ -1,7 +1,7 @@
 #include "game.h"
 
 int main(void) {
-	System sys = init();
+	struct System sys = init();
 
 	if (sys.error == YES) return -1;
 

@@ -1,6 +1,6 @@
 #include "game.h"
 
-int menu(System* sys) {
+int menu(struct System* sys) {
 	bool finished = NO;
 	bool draw = YES;
 

@@ -11,7 +11,7 @@
 #include "game.h"
 
 
-typedef struct {
+struct System{
 	ALLEGRO_DISPLAY* display;
 	ALLEGRO_EVENT_QUEUE* queue;
 	ALLEGRO_TIMER* timer;
@@ -23,10 +23,10 @@ typedef struct {
 	bool confront;
 	bool running;
 	bool error;
-} System;
+};
 
 
 //methods
-System init();
-bool verify(System* sys);
-void destroy(System* sys);
+struct System init();
+bool verify(struct System* sys);
+void destroy(struct System* sys);

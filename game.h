@@ -27,7 +27,7 @@ typedef struct {
 	ALLEGRO_BITMAP* path;
 } Tile;
 
-typedef struct{
+struct Map {
 	int columns;
 	int rows;
 	char path[30];
@@ -36,18 +36,18 @@ typedef struct{
 	bool finish;
 	bool error;
 	int stage;
-} Map;
+} ;
 
 //map
-void init_map(Map* map);
-void draw_map(Map* map);
+void init_map(struct Map* map);
+void draw_map(struct Map* map);
 
 
 //pages
-int menu(System* sys);
+int menu(struct System* sys);
 //int explain(System* sys);
-int battle(System* sys);
-void confront(System* sys, Entity *player, Entity *enemy);
+int battle(struct System* sys);
+void confront(struct System* sys, struct Entity *player, struct Entity *enemy);
 //int over(System* sys); 
 
 

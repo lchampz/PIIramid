@@ -1,7 +1,7 @@
 #include "game.h"
 #include "entity.h"
 
-void confront(System* sys, Entity *player, Entity *enemy) {
+void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 	bool finished = NO;
 	bool draw = YES;
 

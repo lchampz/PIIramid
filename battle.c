@@ -1,14 +1,14 @@
 #include "game.h"
 #include "entity.h"
 
-int battle(System* sys) {
+int battle(struct System* sys) {
 	bool finished = NO;
 	bool draw = YES;
 	bool intro = NO;
 	sys->confront = NO;
 
-	Entity player;
-	Entity enemies;
+	struct Entity player;
+	struct Entity enemies;
 
 	ALLEGRO_BITMAP* bg = al_load_bitmap("./assets/bg.png");
 	ALLEGRO_BITMAP* playerSprite = al_load_bitmap("./assets/sprite.png");
@@ -25,7 +25,7 @@ int battle(System* sys) {
 	btnPlay.limit.Y = btnPlay.coordenades.Y + al_get_bitmap_height(btnPlay.bitmap);
 
 	Coordenades mouse = { .X = 0, .Y = 0 };
-	Map map = { .path = "./assets/map.txt", .finish = NO, .error = NO};
+	struct Map map = { .path = "./assets/map.txt", .finish = NO, .error = NO};
 
 	init_entity(&player, playerSprite, sys->display, YES);
 	init_entity(&enemies, enemySprite, sys->display, YES);

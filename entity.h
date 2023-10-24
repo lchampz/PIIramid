@@ -11,7 +11,7 @@ enum Animation {
 	RUNNING, IDLE
 };
 
-typedef struct Entity {
+struct Entity {
 	bool alive;
 	int lifePoints;
 	int maxLife;
@@ -32,14 +32,14 @@ typedef struct Entity {
 	ALLEGRO_BITMAP* sprite;
 
 	Coordenades colision;
-} Entity;
+};
 
 
-void draw_entity(Entity* entity);
+void draw_entity(struct Entity* entity);
 
-void init_entity(Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* display, bool player);
-bool check_entity_colision(Entity player, Entity enemy);
-void move_entity(Entity* entity, Map map);
+void init_entity(struct Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* display, bool player);
+bool check_entity_colision(struct Entity player, struct Entity enemy);
+void move_entity(struct Entity* entity, struct Map map);
 
-void destroy_entity(Entity* entity);
+void destroy_entity(struct Entity* entity);
 

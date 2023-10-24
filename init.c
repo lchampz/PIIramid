@@ -1,6 +1,6 @@
 #include "init.h"
 
-bool verify(System* sys) {
+bool verify(struct System* sys) {
 	if (al_init()) {
 		sys->display = al_create_display(WIDTH, HEIGHT);
 		sys->queue = al_create_event_queue();
@@ -19,8 +19,8 @@ bool verifyModule(bool module, char name[]) {
 	return !module;
 }
 
-System init() {
-	System sys;
+struct System init() {
+	struct System sys;
 	sys.running = YES;
 
 	al_set_app_name("PIramid");
@@ -59,7 +59,7 @@ System init() {
 	return sys;
 }
 
-void destroy(System* sys) {
+void destroy(struct System* sys) {
 	if (sys->display != NULL) al_destroy_display(sys->display);
 	if (sys->timer != NULL) al_destroy_timer(sys->timer);
 	if (sys->font != NULL) al_destroy_font(sys->font);

@@ -59,12 +59,12 @@ int asciiNumbers(int num) {
 	}
 }
 
-void draw_map(Map* map) {
+void draw_map(struct Map* map) {
 	if (map->tileArr == NULL) {
 		printf("[ERRO] Mapa não localizado!");
 		map->error = YES;	
 	}
-	if (map->error) return NO;
+	if (map->error) return;
 	for (int i = 0; map->rows > i; i++) {
 		for (int j = 0; map->columns > j; j++) {
 			al_draw_bitmap(map->tileArr[i][j].path, map->tileArr[i][j].position.X, map->tileArr[i][j].position.Y, 0);
@@ -72,7 +72,7 @@ void draw_map(Map* map) {
 	}
 }
 
-void init_map(Map* map) {
+void init_map(struct Map* map) {
 	char c;
 	char memo[10] = {" "};
 	char a[10] = {" "};

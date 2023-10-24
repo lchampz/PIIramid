@@ -2,7 +2,7 @@
 #include "game.h"
 #include <stdio.h>
 
-void init_entity(Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* display, bool player) {
+void init_entity(struct Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* display, bool player) {
 	entity->alive = YES;
 	entity->maxLife = 100;
 	entity->lifePoints = entity->maxLife;
@@ -28,7 +28,7 @@ void init_entity(Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* displa
 	entity->colision.Y = NO;
 }
 
-void check_colision(Entity *entity, Map map) {
+void check_colision(struct Entity *entity, struct Map map) {
 	Coordenades colision = { .X = NO, .Y = NO };
 	int index = 0;
 	char *typeOfEntity = "I";
@@ -51,12 +51,12 @@ void check_colision(Entity *entity, Map map) {
 	entity->colision = colision;
 }
 
-bool check_entity_colision(Entity player, Entity enemy) {
+bool check_entity_colision(struct Entity player, struct Entity enemy) {
 	if (player.position.X == enemy.position.X || player.position.Y == enemy.position.Y) return YES;
 	return NO;
 }
 
-void move_entity(Entity* entity, Map map) {
+void move_entity(struct Entity* entity, struct Map map) {
 	if (entity->isMoving == YES) {
 		entity->animation = RUNNING;
 		switch (entity->move)
@@ -86,7 +86,7 @@ void move_entity(Entity* entity, Map map) {
 	if (map.finish) check_colision(entity, map);
 }
 
-void draw_entity(Entity* entity) {
+void draw_entity(struct Entity* entity) {
 	
 	int fx = entity->frame * entity->hitbox.X;
 	int fy = entity->move * entity->hitbox.Y;
@@ -95,6 +95,6 @@ void draw_entity(Entity* entity) {
 	else al_draw_bitmap_region(entity->sprite, 0, entity->move * entity->hitbox.Y, entity->hitbox.X, entity->hitbox.Y, entity->position.X, entity->position.Y, 0);
 }
 
-void destroy_entity(Entity *entity) {
+void destroy_entity(struct Entity *entity) {
 	al_destroy_bitmap(entity->sprite);
 }

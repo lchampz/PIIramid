@@ -6,6 +6,10 @@ enum Estructures {
 	FLOOR, WALL
 };
 
+enum Operations {
+	NONE, SUM, MULTIPLY, ESPECIAL
+};
+
 typedef struct {
 	char placeholder[25];
 	int size;
@@ -51,7 +55,8 @@ void confront(struct System* sys, struct Entity *player, struct Entity *enemy);
 //int over(System* sys); 
 
 
-//destroyers
+//btn
+void drawBtn(Button btn);
 void destroyBtn(Button btn);
 
 

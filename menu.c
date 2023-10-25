@@ -80,18 +80,9 @@ int menu(struct System* sys) {
 			al_draw_bitmap(bg, 0, 0, 0);
 			al_draw_bitmap(logo, 500, -50, 0);
 
-			al_draw_bitmap(btnPlay.bitmap, btnPlay.coordenades.X, btnPlay.coordenades.Y, 0);
-			al_draw_bitmap(btnRecord.bitmap, btnRecord.coordenades.X, btnRecord.coordenades.Y, 0);
-			al_draw_bitmap(btnConfig.bitmap, btnConfig.coordenades.X, btnConfig.coordenades.Y, 0);
-
-			if (btnPlay.isHover) al_draw_text(btnPlay.font, HOVER_WHITE, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
-			else al_draw_text(btnPlay.font, HOVER_BLACK, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
-
-			if (btnRecord.isHover) al_draw_text(btnRecord.font, HOVER_WHITE, btnRecord.coordenades.X + 48, btnRecord.coordenades.Y + 30, 0, btnRecord.placeholder);
-			else al_draw_text(btnRecord.font, HOVER_BLACK, btnRecord.coordenades.X + 48, btnRecord.coordenades.Y + 30, 0, btnRecord.placeholder);
-
-			if (btnConfig.isHover) al_draw_text(btnConfig.font, HOVER_WHITE, btnConfig.coordenades.X + 48, btnConfig.coordenades.Y + 30, 0, btnConfig.placeholder);
-			else al_draw_text(btnConfig.font, HOVER_BLACK, btnConfig.coordenades.X + 48, btnConfig.coordenades.Y + 30, 0, btnConfig.placeholder);
+			drawBtn(btnPlay);
+			drawBtn(btnRecord);
+			drawBtn(btnConfig);
 
 			al_flip_display();
 		}

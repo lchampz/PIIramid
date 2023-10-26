@@ -19,6 +19,8 @@ int menu(struct System* sys) {
 	btnPlay.isHover = NO;
 	btnPlay.limit.X = btnPlay.coordenades.X + al_get_bitmap_width(btnPlay.bitmap);
 	btnPlay.limit.Y = btnPlay.coordenades.Y + al_get_bitmap_height(btnPlay.bitmap);
+	btnPlay.fontPosition.X = 48;
+	btnPlay.fontPosition.Y = 30;
 
 	btnRecord.bitmap = al_load_bitmap("./assets/btnBase.png");
 	btnRecord.coordenades.X = 50;
@@ -28,6 +30,8 @@ int menu(struct System* sys) {
 	btnRecord.isHover = NO;
 	btnRecord.limit.X = btnRecord.coordenades.X + al_get_bitmap_width(btnRecord.bitmap);
 	btnRecord.limit.Y = btnRecord.coordenades.Y + al_get_bitmap_height(btnRecord.bitmap);
+	btnRecord.fontPosition.X = 48;
+	btnRecord.fontPosition.Y = 30;
 
 	btnConfig.bitmap = al_load_bitmap("./assets/btnBase.png");
 	btnConfig.coordenades.X = 50;
@@ -37,6 +41,8 @@ int menu(struct System* sys) {
 	btnConfig.isHover = NO;
 	btnConfig.limit.X = btnConfig.coordenades.X + al_get_bitmap_width(btnConfig.bitmap);
 	btnConfig.limit.Y = btnConfig.coordenades.Y + al_get_bitmap_height(btnConfig.bitmap);
+	btnConfig.fontPosition.X = 48;
+	btnConfig.fontPosition.Y = 30;
 
 	Coordenades mouse = {.X = 0, .Y = 0};
 

@@ -30,9 +30,12 @@ int battle(struct System* sys) {
 	init_entity(&player, playerSprite, sys->display, YES);
 	init_entity(&enemies, enemySprite, sys->display, YES);
 
+	player.type = PLAYER;
+
 	enemies.position.X = 800;
 	enemies.position.Y = 300;
 	enemies.speed = 2;
+	enemies.type = MUMMY;
 
 	while (player.alive && sys->running && !finished && !sys->error) {
 		ALLEGRO_EVENT event;
@@ -133,7 +136,7 @@ int battle(struct System* sys) {
 				if (enemies.alive) draw_entity(&enemies);
 
 				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 20, 20, 0, "Vida: ");
-				al_draw_rectangle(100, 20, 200, 40, al_map_rgb(0, 255, 0), 2);
+				al_draw_rectangle(100, 20, 200, 40, al_map_rgb(255, 255, 255), 2);
 
 				al_draw_filled_rectangle(100, 20, player.lifePoints + 100, 40, al_map_rgb(0, 255, 0));
 			}

@@ -10,6 +10,9 @@ enum Moves {
 enum Animation {
 	RUNNING, IDLE
 };
+enum TypesOfEntities {
+	PLAYER, ZOMBIE, MUMMY
+};
 
 struct Entity {
 	bool alive;
@@ -25,6 +28,7 @@ struct Entity {
 	int frameDelay;
 	int countFrame;
 	int animation;
+	int type;
 
 	bool isMoving;
 	bool player;

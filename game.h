@@ -17,6 +17,7 @@ typedef struct {
 
 	Coordenades coordenades;
 	Coordenades limit;
+	Coordenades fontPosition;
 
 	ALLEGRO_FONT* font;
 	ALLEGRO_BITMAP* bitmap;

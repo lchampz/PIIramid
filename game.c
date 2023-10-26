@@ -21,8 +21,8 @@ int binarySearch(int arr[], int num, int left, int right) {
 
 void drawBtn(Button btn) {
 	al_draw_bitmap(btn.bitmap, btn.coordenades.X, btn.coordenades.Y, 0);
-	if (btn.isHover) al_draw_text(btn.font, HOVER_WHITE, btn.coordenades.X + 48, btn.coordenades.Y + 30, 0, btn.placeholder);
-	else al_draw_text(btn.font, HOVER_BLACK, btn.coordenades.X + 48, btn.coordenades.Y + 30, 0, btn.placeholder);
+	if (btn.isHover) al_draw_text(btn.font, HOVER_WHITE, btn.coordenades.X + btn.fontPosition.X, btn.coordenades.Y + +btn.fontPosition.Y, 0, btn.placeholder);
+	else al_draw_text(btn.font, HOVER_BLACK, btn.coordenades.X + btn.fontPosition.X, btn.coordenades.Y + btn.fontPosition.Y, 0, btn.placeholder);
 }
 
 void destroyBtn(Button btn) {

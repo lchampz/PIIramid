@@ -2,11 +2,11 @@
 #include "entity.h"
 
 int battle(struct System* sys) {
+	sys->confront = NO;
 	bool finished = NO;
 	bool draw = YES;
 	bool intro = NO;
-	sys->confront = NO;
-
+	
 	struct Entity player;
 	struct Entity enemies;
 
@@ -35,7 +35,7 @@ int battle(struct System* sys) {
 	enemies.position.X = 800;
 	enemies.position.Y = 300;
 	enemies.speed = 2;
-	enemies.type = MUMMY;
+	enemies.type = ZOMBIE;
 
 	while (player.alive && sys->running && !finished && !sys->error) {
 		ALLEGRO_EVENT event;

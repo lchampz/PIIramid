@@ -2,6 +2,49 @@
 #include "game.h"
 #include <string.h>
 
+int arrToInt(int* arr, int size) {
+	int num = 0;
+	int base = 1;
+
+	for (int i = size - 1; i >= 0; i--) {
+		num += arr[i] * base;
+		base *= 10;
+	}
+	printf("%d\n", num);
+	return num;
+}
+
+int* intToArr(int num, int size) {
+	int* arr = malloc(size * sizeof(int));
+	int total = num;
+	int base = 100000000;
+
+	while (base / total != 0) {
+		base /= 10;
+		if (base == total)
+			break;
+	}
+	for (int i = 0; i < size; i++) {
+		int count = 0;
+		int pass = 0;
+		while (total / base > 0) {
+			count += 1;
+			total -= base;
+			pass++;
+		}
+		arr[i] = count;
+		base /= 10;
+	}
+
+	printf("[");
+	for (int i = 0; size > i; i++) {
+		printf(" %d ", arr[i]);
+	}
+	printf("]");
+
+	return arr;
+}
+
 int binarySearch(int arr[], int num, int left, int right) {
 	while (right > left) {
 		int m = left + (right - left / 2);
@@ -21,7 +64,7 @@ int binarySearch(int arr[], int num, int left, int right) {
 
 void drawBtn(Button btn) {
 	al_draw_bitmap(btn.bitmap, btn.coordenades.X, btn.coordenades.Y, 0);
-	if (btn.isHover) al_draw_text(btn.font, HOVER_WHITE, btn.coordenades.X + btn.fontPosition.X, btn.coordenades.Y + +btn.fontPosition.Y, 0, btn.placeholder);
+	if (btn.isHover) al_draw_text(btn.font, HOVER_WHITE, btn.coordenades.X + btn.fontPosition.X, btn.coordenades.Y + btn.fontPosition.Y, 0, btn.placeholder);
 	else al_draw_text(btn.font, HOVER_BLACK, btn.coordenades.X + btn.fontPosition.X, btn.coordenades.Y + btn.fontPosition.Y, 0, btn.placeholder);
 }
 
@@ -182,5 +225,10 @@ void init_map(struct Map* map) {
 
 	fclose(arq);
 	map->finish = YES;
+}
+
+bool isCorrect(int result, int answer) {
+	if (result == answer) return YES;
+	return NO;
 }
 

@@ -7,7 +7,7 @@ enum Estructures {
 };
 
 enum Operations {
-	NONE, SUM, MULTIPLY, ESPECIAL
+	NONE, SUM, MULTIPLY, ESPECIAL, LEAVE
 };
 
 typedef struct {
@@ -63,3 +63,6 @@ void destroyBtn(Button btn);
 
 //utils
 int binarySearch(int arr[], int num, int left, int right);
+int* intToArr(int num, int index);
+int arrToInt(int* arr, int index);
+bool isCorrect(int result, int answer);

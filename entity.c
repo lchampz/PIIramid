@@ -13,8 +13,8 @@ void init_entity(struct Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY*
 		entity->hitbox.Y = SPRITE_CHAR_H;
 	}
 	else {
-		entity->hitbox.X = 0;
-		entity->hitbox.Y = 0;
+		entity->hitbox.X = SPRITE_ENEMY_W;
+		entity->hitbox.Y = SPRITE_ENEMY_H;
 	}
 	entity->sprite = sprite;
 	entity->speed = 5;

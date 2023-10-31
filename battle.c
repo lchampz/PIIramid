@@ -12,7 +12,7 @@ int battle(struct System* sys) {
 
 	ALLEGRO_BITMAP* bg = al_load_bitmap("./assets/bg.png");
 	ALLEGRO_BITMAP* playerSprite = al_load_bitmap("./assets/sprite.png");
-	ALLEGRO_BITMAP* enemySprite = al_load_bitmap("./assets/sprite.png");
+	ALLEGRO_BITMAP* enemySprite = al_load_bitmap("./assets/enemy2.png");
 
 	Button btnPlay = { .placeholder = "Entendido!" };
 	btnPlay.bitmap = al_load_bitmap("./assets/btnBase.png");
@@ -35,7 +35,7 @@ int battle(struct System* sys) {
 	enemies.position.X = 800;
 	enemies.position.Y = 300;
 	enemies.speed = 2;
-	enemies.type = ZOMBIE;
+	enemies.type = MUMMY;
 
 	while (player.alive && sys->running && !finished && !sys->error) {
 		ALLEGRO_EVENT event;
@@ -120,7 +120,10 @@ int battle(struct System* sys) {
 			al_clear_to_color(HOVER_BLACK);
 
 			if (!map.finish && !map.error) init_map(&map);
-			if (!map.error) draw_map(&map);
+			if (!map.error) {
+				draw_map(&map);
+				//al_draw_bitmap(al_load_bitmap("./assets/piramides.jpg"), 0, -100, 0);
+			}
 
 			if (intro) {
 				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 200, 200, 0, "teste");
@@ -145,9 +148,9 @@ int battle(struct System* sys) {
 			al_flip_display();
 		}
 	}
-	destroy_entity(&enemies);
+	if (!enemies.alive) destroy_entity(&enemies);
 	destroyBtn(btnPlay);
-	destroy_entity(&player);
+	if (!player.alive) destroy_entity(&player);
 	al_destroy_bitmap(bg);
 
 	return !player.alive;

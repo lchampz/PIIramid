@@ -7,6 +7,10 @@
 enum Moves {
 	 DOWN, UP, LEFT, RIGHT
 };
+
+enum MovesMummy {
+	LEFT_MUMMY = 3, RIGHT_MUMMY = 1
+};
 enum Animation {
 	RUNNING, IDLE
 };

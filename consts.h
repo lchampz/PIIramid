@@ -12,8 +12,8 @@
 #define SPRITE_CHAR_W 102 
 #define SPRITE_CHAR_H 152
 
-#define SPRITE_ENEMY_W 136
-#define SPRITE_ENEMY_H 241
+#define SPRITE_MUMMY_W 136
+#define SPRITE_MUMMY_H 181
 #define DESCRIPTION_MUMMY "Provavelmente algum farao carcumido por vermes..."
 #define DESCRIPTION_MUMMY2 "apesar das mariposas acharem suas ataduras apetitosas, seu maior medo e a"
 #define DESCRIPTION_ZOMBIE "Ceeeeeeeerebros... Ceeeeeeeeeeerebros..."

@@ -8,47 +8,28 @@ void init_entity(struct Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY*
 	entity->lifePoints = entity->maxLife;
 	entity->move = UP;
 	entity->frame = 0;
-	if (player) {
+	if (entity->type == PLAYER) {
 		entity->hitbox.X = SPRITE_CHAR_W;
 		entity->hitbox.Y = SPRITE_CHAR_H;
 	}
-	else {
-		entity->hitbox.X = SPRITE_ENEMY_W;
-		entity->hitbox.Y = SPRITE_ENEMY_H;
+	if (entity->type == MUMMY) {
+		entity->hitbox.X = SPRITE_MUMMY_W;
+		entity->hitbox.Y = SPRITE_MUMMY_H;
 	}
 	entity->sprite = sprite;
 	entity->speed = 5;
-	entity->position.X = al_get_display_width(display) / 2 - entity->hitbox.X / 2;
+	entity->position.X = 30;
 	entity->position.Y = (al_get_display_width(display) / 2 - entity->hitbox.Y / 2) - 40;
 	entity->frameDelay = 8;
 	entity->countFrame = 8;
+	if (entity->type == MUMMY) {
+		entity->frameDelay = 4;
+		entity->countFrame = 4;
+	}
 	entity->isMoving = NO;
 	entity->animation = IDLE;
 	entity->colision.X = NO;
 	entity->colision.Y = NO;
-}
-
-void check_colision(struct Entity *entity, struct Map map) {
-	Coordenades colision = { .X = NO, .Y = NO };
-	int index = 0;
-	char *typeOfEntity = "I";
-	if (entity->player) typeOfEntity = "J";
-	
-	for (int i = 0; map.rows > i; i++) {
-		for (int j = 0; map.columns > j; j++) {
-			if (map.tileArr[i][j].hasColision) {
-				if (entity->position.X <= 0 || entity->position.X >= WIDTH - 130) colision.X = YES;
-				if (entity->position.Y <= 0 || entity->position.Y >= HEIGHT - 160) colision.Y = YES;
-				if (colision.X || colision.Y) entity->isMoving = NO;
-				else {
-					colision.X = NO;
-					colision.Y = NO;
-				}
-			}
-		}
-	}
-
-	entity->colision = colision;
 }
 
 bool check_entity_colision(struct Entity player, struct Entity enemy) {
@@ -57,7 +38,7 @@ bool check_entity_colision(struct Entity player, struct Entity enemy) {
 }
 
 void move_entity(struct Entity* entity, struct Map map) {
-	if (entity->isMoving == YES) {
+	if (entity->isMoving == YES && entity->type == PLAYER) {
 		entity->animation = RUNNING;
 		switch (entity->move)
 		{
@@ -72,18 +53,37 @@ void move_entity(struct Entity* entity, struct Map map) {
 			}
 			break;
 		case LEFT:
-			if (entity->position.X > 0 - entity->hitbox.X) {
-				entity->position.X -= entity->speed;
+			if (entity->type == PLAYER) {
+				if (entity->position.X > 0 - entity->hitbox.X) {
+					entity->position.X -= entity->speed;
+				}
 			}
 			break;
 		case RIGHT:
-			if (entity->position.X < WIDTH - entity->hitbox.X) {
-				entity->position.X += entity->speed;
+			if (entity->type == PLAYER) {
+				if (entity->position.X < WIDTH - entity->hitbox.X) {
+					entity->position.X += entity->speed;
+				}
 			}
 		}
 	}
 	else entity->animation = IDLE;
-	if (map.finish) check_colision(entity, map);
+	if (entity->isMoving == YES && entity->type == MUMMY) {
+		entity->animation = RUNNING;
+		switch (entity->move)
+		{
+		case LEFT_MUMMY:
+			if (entity->position.X < WIDTH - entity->hitbox.X) {
+				entity->position.X -= entity->speed;
+			}
+			break;
+		case RIGHT_MUMMY:
+			if (entity->position.Y > 0) {
+				entity->position.X += entity->speed;
+			}
+			break;
+		};
+	}
 }
 
 void draw_entity(struct Entity* entity) {

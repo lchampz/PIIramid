@@ -2,29 +2,59 @@
 #include "entity.h"
 #include <time.h>
 
+char* questionsMultiply[] = { "25 * 2 = ?", "200 * 30 = ?", "(40 * 40) * 3 = ?" };
+char* questionsSum[] = { "25 + 2 = ?", "200 + 30 = ?", "(40 + 40) + 3 = ?" };
+char* questionsEspecial[] = { "fx => 25 * x = 100", "fx => 200 * x = 0", "fx => (40 + 40) * x = 160" };
+int answersMultiply[] = { 50, 6000, 4800 };
+int answersSum[] = { 27, 230, 83 };
+int answersEspecial[] = { 4, 0, 2 };
+
+struct Confront {
+	int count; 
+	int answer;
+	bool description;
+	int operation;
+};
+
+void checkQuestion(struct Entity* enemy, struct Entity* player, int* arrAnswer, int rdmIndex, struct Confront* confront) {
+
+	confront->answer = arrToInt(arrAnswer, confront->count);
+	if (confront->operation == MULTIPLY) {
+		if (confront->answer == answersMultiply[rdmIndex]) {
+			if (enemy->type == MUMMY) enemy->lifePoints -= 30;
+			else enemy->lifePoints -= 10;
+		}
+	}
+	if (confront->operation == SUM) {
+		if (confront->answer == answersSum[rdmIndex]) {
+			if (enemy->type == MUMMY) enemy->lifePoints -= 10;
+			else enemy->lifePoints -= 30;
+		}
+	}
+	if (confront->operation == ESPECIAL) {
+		if (confront->answer == answersEspecial[rdmIndex])enemy->lifePoints -= enemy->lifePoints / 2;
+		else player->lifePoints -= player->lifePoints / 2;
+	}
+	confront->description = YES;
+	confront->operation = NONE;
+	confront->answer = 0;
+	for (int i = 0; confront->count > i; i++) arrAnswer[i] = NULL;
+}
+
 void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 	bool finished = NO;
 	bool draw = YES;
-	bool description = YES;
-	int operation = NONE;	
-	int count = 0;
-	int answer = 0;
-	char* questionsMultiply[] = { "25 * 2 = ?", "200 * 30 = ?", "(40 * 40) * 3 = ?" };
-	char* questionsSum[] = { "25 + 2 = ?", "200 + 30 = ?", "(40 + 40) + 3 = ?" };
-	char* questionsEspecial[] = { "fx => 25 * x = 100", "fx => 200 * x = 0", "fx => (40 + 40) * x = 160" };
-	int answersMultiply[] = { 50, 6000, 4800 };
-	int answersSum[] = { 27, 230, 83};
-	int answersEspecial[] = { 4, 0, 2};
 	int* arrAnswer = malloc(9 * sizeof(int));
 	int rdmIndex = rand() % 2;
-
+	struct Confront confront = { .answer = 0, .count = 0, .description = YES, .operation = NONE };
 
 	srand(time(NULL));
 
 	ALLEGRO_FONT* titleMonster = al_load_font("./assets/font.ttf", 30, 0);
 
 	Coordenades mouse;
-	ALLEGRO_BITMAP* logo = al_load_bitmap("./assets/logo.png");
+	ALLEGRO_BITMAP* dungeon = al_load_bitmap("./assets/bg_dungeon.png");
+	ALLEGRO_BITMAP* mummy = al_load_bitmap("./assets/mummy_banner.png");
 
 	Button btnMultiply = { .placeholder = "Multiplicação" };
 	btnMultiply.bitmap = al_load_bitmap("./assets/btnBase.png");
@@ -76,7 +106,7 @@ void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 
 	Button btnAnswer = { .placeholder = "Responder" };
 	btnAnswer.bitmap = al_load_bitmap("./assets/btnBase.png");
-	btnAnswer.coordenades.X = 720;
+	btnAnswer.coordenades.X = 820;
 	btnAnswer.coordenades.Y = 600;
 	btnAnswer.size = 25;
 	btnAnswer.font = al_load_font("./assets/font.ttf", btnAnswer.size, 0);
@@ -113,66 +143,75 @@ void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 			case ALLEGRO_EVENT_KEY_DOWN:
 				switch (event.keyboard.keycode) {
 				case ALLEGRO_KEY_0:
-					if (count < 9) {
-						arrAnswer[count] = 0;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 0;
+						confront.count++;
 					}
 				break;
 				case ALLEGRO_KEY_1:
-					if (count < 9) {
-						arrAnswer[count] = 1;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 1;
+						confront.count++;
 					}
 					
 				break;
 				case ALLEGRO_KEY_2:
-					if (count < 9) {
-						arrAnswer[count] = 2;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 2;
+						confront.count++;
 					}
 				break;
 				case ALLEGRO_KEY_3:
-					if (count < 9) {
-						arrAnswer[count] = 3;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 3;
+						confront.count++;
 					}
 				break;
 				case ALLEGRO_KEY_4:
-					if (count < 9) {
-						arrAnswer[count] = 4;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 4;
+						confront.count++;
 					}
 				break;
 				case ALLEGRO_KEY_5:
-					if (count < 9) {
-						arrAnswer[count] = 5;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 5;
+						confront.count++;
 					}
 				break;
 				case ALLEGRO_KEY_6:
-					if (count < 9) {
-						arrAnswer[count] = 6;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 6;
+						confront.count++;
 					}
 				break;
 				case ALLEGRO_KEY_7:
-					if (count < 9) {
-						arrAnswer[count] = 7;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 7;
+						confront.count++;
 					}
 					break;
 				case ALLEGRO_KEY_8:
-					if (count < 9) {
-						arrAnswer[count] = 8;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 8;
+						confront.count++;
 					}
 					break;
 				case ALLEGRO_KEY_9:
-					if (count < 9) {
-						arrAnswer[count] = 9;
-						count++;
+					if (confront.count < 9) {
+						arrAnswer[confront.count] = 9;
+						confront.count++;
 					}
 					break;
+				case ALLEGRO_KEY_BACKSPACE:
+					
+					if (confront.count > 0) confront.count--;
+					arrAnswer[confront.count] = NULL;
+					
+				break;
+				case ALLEGRO_KEY_ENTER:	
+					if(confront.count != 0) checkQuestion(enemy, player, arrAnswer, rdmIndex, &confront);
+				break;
 				}
 				break;
 			case ALLEGRO_EVENT_MOUSE_BUTTON_DOWN:
@@ -180,53 +219,32 @@ void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 				mouse.Y = event.mouse.y;
 
 				if (event.mouse.button & 1) {
-					if (btnSum.isHover) {
-						operation = SUM;
-						description = NO;
+					if (btnSum.isHover && confront.description) {
+						confront.operation = SUM;
+						confront.description = NO;
 					}
-					if (btnMultiply.isHover) {
-						operation = MULTIPLY;
-						description = NO;
+					if (btnMultiply.isHover && confront.description) {
+						confront.operation = MULTIPLY;
+						confront.description = NO;
 					}
-					if (btnEspecial.isHover) {
-						operation = ESPECIAL;
-						description = NO;
+					if (btnEspecial.isHover && confront.description) {
+						confront.operation = ESPECIAL;
+						confront.description = NO;
 					}
 					if (btnAnswer.isHover) {
-						answer = arrToInt(arrAnswer, count);
-						if (operation == MULTIPLY) {
-							if (answer == answersMultiply[rdmIndex]) {
-								if (enemy->type == MUMMY) enemy->lifePoints -= 30;
-								else enemy->lifePoints -= 10;
-								answered = NO;
-							}
-						}
-						if (operation == SUM) {
-							if (answer == answersSum[rdmIndex]) {
-								if (enemy->type == MUMMY) enemy->lifePoints -= 10;
-								else enemy->lifePoints -= 30;
-								answered = NO;
-							}
-						}
-						if (operation == ESPECIAL) {
-							if (answer == answersEspecial[rdmIndex])enemy->lifePoints -= enemy->lifePoints / 2;
-							else player->lifePoints -= player->lifePoints / 2;
-							answered = NO;
-						}
-						description = YES;
-						operation = NONE;
+						if(confront.count != 0) checkQuestion(enemy, player, arrAnswer, rdmIndex, &confront);
 					}
-					if (btnLeave.isHover) operation = LEAVE;
+					if (btnLeave.isHover) confront.operation = LEAVE;
 				}
 		}
 
 		if (player->lifePoints <= 0) player->alive = NO;
 		if (enemy->lifePoints <= 0) enemy->alive = NO;
-		if (operation == LEAVE) sys->confront = NO;
+		if (confront.operation == LEAVE) sys->confront = NO;
 
 		if (draw && al_is_event_queue_empty(sys->queue)) {
 			draw = NO;
-			al_clear_to_color(HOVER_BLACK);
+			al_draw_bitmap(dungeon, 0,0, 0);
 
 			//lifebar
 			al_draw_text(sys->font, al_map_rgb(255, 255, 255), 20, 20, 0, "Vida: ");
@@ -238,9 +256,13 @@ void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 			al_draw_rectangle(820, 20, 920, 40, al_map_rgb(255, 255, 255), 2);
 			al_draw_filled_rectangle(820, 20, enemy->lifePoints + 820, 40, al_map_rgb(0, 255, 0));
 
+			if (enemy->type == MUMMY) {
+				al_draw_bitmap(mummy, 800, 130, 0);
+			}
+
 			al_draw_filled_rectangle(0, 450, WIDTH, HEIGHT, al_map_rgb(236, 198, 152));
 
-			if (description) {
+			if (confront.description) {
 				if (enemy->type == MUMMY) {
 					al_draw_text(titleMonster, al_map_rgb(255, 255, 255), 20, 420, 0, "Mumia");
 					al_draw_text(sys->font, HOVER_BLACK, 20, 460, 0, DESCRIPTION_MUMMY);
@@ -263,22 +285,20 @@ void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 			else {
 				al_draw_rectangle(20, 500, 205, 530, al_map_rgb(255, 255, 255), 2);
 				drawBtn(btnAnswer);
-				if (operation == MULTIPLY) al_draw_text(titleMonster, HOVER_BLACK, 20, 460, 0, questionsMultiply[rdmIndex]);
-				if (operation == SUM) al_draw_text(titleMonster, HOVER_BLACK, 20, 460, 0, questionsSum[rdmIndex]);
-				if (operation == ESPECIAL) al_draw_text(titleMonster, HOVER_BLACK, 20, 460, 0, questionsEspecial[rdmIndex]);
-				for (int i = 0; i < count; i++) {
-					al_draw_textf(sys->font, HOVER_BLACK, 25 + (i * 20), 505, 0, "%d", arrAnswer[i]);
-				}
+				if (confront.operation == MULTIPLY) al_draw_text(titleMonster, HOVER_BLACK, 20, 460, 0, questionsMultiply[rdmIndex]);
+				if (confront.operation == SUM) al_draw_text(titleMonster, HOVER_BLACK, 20, 460, 0, questionsSum[rdmIndex]);
+				if (confront.operation == ESPECIAL) al_draw_text(titleMonster, HOVER_BLACK, 20, 460, 0, questionsEspecial[rdmIndex]);
+				for (int i = 0; i < confront.count; i++) al_draw_textf(sys->font, HOVER_BLACK, 25 + (i * 20), 505, 0, "%d", arrAnswer[i]);
 			}
 			al_flip_display();
 		}
 	}
 	free(arrAnswer);
-	if (!enemy->alive) destroy_entity(enemy);
-	if (!player->alive) destroy_entity(player);
 	destroyBtn(btnSum);
 	destroyBtn(btnMultiply);
 	destroyBtn(btnEspecial);
 	destroyBtn(btnLeave);
 	destroyBtn(btnAnswer);
+	al_destroy_bitmap(mummy);
+	al_destroy_bitmap(dungeon);
 }

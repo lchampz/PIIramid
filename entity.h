@@ -47,7 +47,7 @@ void draw_entity(struct Entity* entity);
 
 void init_entity(struct Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY* display, bool player);
 bool check_entity_colision(struct Entity player, struct Entity enemy);
-void move_entity(struct Entity* entity, struct Map map);
+void move_entity(struct Entity* entity);
 
 void destroy_entity(struct Entity* entity);
 

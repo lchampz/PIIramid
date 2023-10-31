@@ -5,38 +5,47 @@ int battle(struct System* sys) {
 	sys->confront = NO;
 	bool finished = NO;
 	bool draw = YES;
-	bool intro = NO;
+	bool intro = YES;
 	int phase = 1;
 	int enemySteps = 0;
 	
 	struct Entity player;
 	struct Entity mummy;
+	struct Entity zombie;
 
 	ALLEGRO_BITMAP* bg = al_load_bitmap("./assets/bg.png");
 	ALLEGRO_BITMAP* playerSprite = al_load_bitmap("./assets/sprite.png");
-	ALLEGRO_BITMAP* enemySprite = al_load_bitmap("./assets/enemy2.png");
+	ALLEGRO_BITMAP* mummySprite = al_load_bitmap("./assets/enemy2.png");
+	ALLEGRO_FONT* title = al_load_font("./assets/font.ttf", 30, 0);
 
 	player.type = PLAYER;
 	mummy.type = MUMMY;
+	zombie.type = ZOMBIE;
 	
-	Button btnPlay = { .placeholder = "Entendido!" };
+	Button btnPlay = { .placeholder = "Vamos la!" };
 	btnPlay.bitmap = al_load_bitmap("./assets/btnBase.png");
-	btnPlay.coordenades.X = 550;
-	btnPlay.coordenades.Y = 850;
+	btnPlay.coordenades.X = 570;
+	btnPlay.coordenades.Y = 430;
 	btnPlay.size = 25;
 	btnPlay.font = al_load_font("./assets/font.ttf", btnPlay.size, 0);
 	btnPlay.isHover = NO;
 	btnPlay.limit.X = btnPlay.coordenades.X + al_get_bitmap_width(btnPlay.bitmap);
 	btnPlay.limit.Y = btnPlay.coordenades.Y + al_get_bitmap_height(btnPlay.bitmap);
+	btnPlay.fontPosition.X = 18;
+	btnPlay.fontPosition.Y = 30;
 
 	Coordenades mouse = { .X = 0, .Y = 0 };
 	struct Map map = { .path = "./assets/map.txt", .finish = NO, .error = NO};
 
 	init_entity(&player, playerSprite, sys->display, YES);
-	init_entity(&mummy, enemySprite, sys->display, NO);
+	init_entity(&mummy, mummySprite, sys->display, NO);
+	init_entity(&zombie, playerSprite, sys->display, YES);
 
 	mummy.position.X = 600;
 	mummy.speed = 2;
+
+	zombie.position.X = 600;
+	zombie.speed = 2;
 	
 	ALLEGRO_BITMAP* mapBitmap = al_load_bitmap("./assets/map.png");
 
@@ -47,9 +56,11 @@ int battle(struct System* sys) {
 
 		if (event.type == ALLEGRO_EVENT_TIMER) {
 			draw = YES;
-			move_entity(&player, map);
-			move_entity(&mummy, map);
-			sys->confront = check_entity_colision(player, mummy);
+			move_entity(&player);
+			move_entity(&mummy);
+			move_entity(&zombie);
+			if(phase == 1) sys->confront = check_entity_colision(player, mummy);
+			if(phase == 2) sys->confront = check_entity_colision(player, zombie);
 		}
 
 		if (++player.countFrame >= player.frameDelay) {
@@ -58,11 +69,22 @@ int battle(struct System* sys) {
 			player.countFrame = 0;
 		}
 
-		if (++mummy.countFrame >= mummy.frameDelay) {
-			mummy.frame++;
-			if (mummy.frame >= 3) mummy.frame = 0;
-			mummy.countFrame = 0;
+		if (phase == 2) {
+			if (++zombie.countFrame >= zombie.frameDelay) {
+				zombie.frame++;
+				if (zombie.frame >= 4) zombie.frame = 0;
+				zombie.countFrame = 0;
+			}
 		}
+		
+		if (phase == 1) {
+			if (++mummy.countFrame >= mummy.frameDelay) {
+				mummy.frame++;
+				if (mummy.frame >= 3) mummy.frame = 0;
+				mummy.countFrame = 0;
+			}
+		}
+		
 		switch (event.type) {
 		case ALLEGRO_EVENT_DISPLAY_CLOSE:
 			finished = YES;
@@ -100,55 +122,78 @@ int battle(struct System* sys) {
 			}
 		}
 
-		mummy.isMoving = YES;
+		if (phase == 1) mummy.isMoving = YES;
+		if (phase == 2) zombie.isMoving = YES;
 
-		if (enemySteps == 200) {
-			mummy.move = RIGHT_MUMMY;
+		if (enemySteps == 150) {
+			if (phase == 1) mummy.move = RIGHT_MUMMY;
+			if (phase == 2) zombie.move = RIGHT;
 		}
 		if (enemySteps == 0) {
-			mummy.move = LEFT_MUMMY;
+			if (phase == 1) mummy.move = LEFT_MUMMY;
+			if (phase == 2) zombie.move = LEFT;
 		}
 		
-		if (mummy.move == LEFT_MUMMY) enemySteps++;
-		else enemySteps--;
-
-		if (player.position.X > 1000) phase = 2;
+		if (phase == 1) {
+			if (mummy.move == LEFT_MUMMY) enemySteps++;
+			else enemySteps--;
+		}
+		
+		if (phase == 2) {
+			if (zombie.move == LEFT) enemySteps++;
+			else enemySteps--;
+		}
+		
+		if (player.position.X > 1000) {
+			phase++;
+			enemySteps = 0;
+			player.position.X = 0;
+		}
 
 		if (draw && al_is_event_queue_empty(sys->queue)) {
 			draw = NO;
 			al_clear_to_color(HOVER_BLACK);
 
 			if (intro) {
-				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 200, 200, 0, "teste");
-
-				al_draw_bitmap(btnPlay.bitmap, btnPlay.coordenades.X, btnPlay.coordenades.Y, 0);
-				if (btnPlay.isHover) al_draw_text(btnPlay.font, HOVER_WHITE, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
-				else al_draw_text(btnPlay.font, HOVER_BLACK, btnPlay.coordenades.X + 48, btnPlay.coordenades.Y + 30, 0, btnPlay.placeholder);
-			}
-			if (sys->confront) confront(sys, &player, &mummy);
-			if (phase == 1) {
-				al_draw_bitmap(mapBitmap, 0, 0, 0);
-				if (player.alive) draw_entity(&player);
-				if (mummy.alive) draw_entity(&mummy);
-
-				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 20, 20, 0, "Vida: ");
-				al_draw_rectangle(100, 20, 200, 40, al_map_rgb(255, 255, 255), 2);
-
-				al_draw_filled_rectangle(100, 20, player.lifePoints + 100, 40, al_map_rgb(0, 255, 0));
-			}
-			if (phase == 2) {
-				al_draw_bitmap(mapBitmap, 0, 0, 0);
-				if (player.alive) draw_entity(&player);
+				al_draw_text(title, al_map_rgb(255, 255, 255), 460, 150, 0, "Chamado da Aventura!");
+				al_draw_filled_rectangle(200, 200, 1150, 480, al_map_rgb(236, 198, 152));
 				
-
-				al_draw_text(sys->font, al_map_rgb(255, 255, 255), 20, 20, 0, "Vida: ");
-				al_draw_rectangle(100, 20, 200, 40, al_map_rgb(255, 255, 255), 2);
-
-				al_draw_filled_rectangle(100, 20, player.lifePoints + 100, 40, al_map_rgb(0, 255, 0));
+				al_draw_text(sys->font, HOVER_BLACK, 215, 220, 0, INTRO);
+				al_draw_text(sys->font, HOVER_BLACK, 215, 250, 0, INTRO2);
+				al_draw_text(sys->font, HOVER_BLACK, 215, 280, 0, INTRO3);
+				al_draw_text(sys->font, HOVER_BLACK, 215, 310, 0, INTRO4);
+				al_draw_text(sys->font, HOVER_BLACK, 500, 380, 0, INTRO5);
+				
+				drawBtn(btnPlay);
 			}
-			if (phase == 3) {
+			else {
+				if (sys->confront && (phase == 1)) confront(sys, &player, &mummy, phase);
+				if (sys->confront && (phase == 2)) confront(sys, &player, &zombie, phase);
+				if (phase == 1) {
+					al_draw_bitmap(mapBitmap, 0, 0, 0);
+					if (player.alive) draw_entity(&player);
+					if (mummy.alive) draw_entity(&mummy);
 
+					al_draw_text(sys->font, al_map_rgb(255, 255, 255), 20, 20, 0, "Vida: ");
+					al_draw_rectangle(100, 20, 200, 40, al_map_rgb(255, 255, 255), 2);
+
+					al_draw_filled_rectangle(100, 20, player.lifePoints + 100, 40, al_map_rgb(0, 255, 0));
+				}
+				if (phase == 2) {
+					al_draw_bitmap(mapBitmap, 0, 0, 0);
+					if (player.alive) draw_entity(&player);
+					if (zombie.alive) draw_entity(&zombie);
+
+					al_draw_text(sys->font, al_map_rgb(255, 255, 255), 20, 20, 0, "Vida: ");
+					al_draw_rectangle(100, 20, 200, 40, al_map_rgb(255, 255, 255), 2);
+
+					al_draw_filled_rectangle(100, 20, player.lifePoints + 100, 40, al_map_rgb(0, 255, 0));
+				}
+				if (phase == 3) {
+
+				}
 			}
+			
 			
 			
 			al_flip_display();

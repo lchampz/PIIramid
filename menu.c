@@ -11,6 +11,8 @@ int menu(struct System* sys) {
 	Button btnRecord = { .placeholder = "Record" };
 	Button btnConfig = { .placeholder = "Configs" };
 
+	Animation logoAnimated = { .done = NO, .final.Y = -50, .actual.Y = -250};
+
 	btnPlay.bitmap = al_load_bitmap("./assets/btnBase.png");
 	btnPlay.coordenades.X = 50;
 	btnPlay.coordenades.Y = 150;
@@ -78,13 +80,18 @@ int menu(struct System* sys) {
 
 		}
 		
+		if (!logoAnimated.done) {
+			if (logoAnimated.actual.Y < logoAnimated.final.Y) logoAnimated.actual.Y++;
+			else logoAnimated.done = YES;
+		}
+		
 
 		if (draw && al_is_event_queue_empty(sys->queue)) {
 			draw = NO;
 			al_clear_to_color(HOVER_BLACK);
 
 			al_draw_bitmap(bg, 0, 0, 0);
-			al_draw_bitmap(logo, 500, -50, 0);
+			al_draw_bitmap(logo, 500, logoAnimated.actual.Y, 0);
 
 			drawBtn(btnPlay);
 			drawBtn(btnRecord);

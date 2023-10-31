@@ -8,7 +8,7 @@ void init_entity(struct Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY*
 	entity->lifePoints = entity->maxLife;
 	entity->move = UP;
 	entity->frame = 0;
-	if (entity->type == PLAYER) {
+	if (entity->type == PLAYER || entity->type == ZOMBIE) {
 		entity->hitbox.X = SPRITE_CHAR_W;
 		entity->hitbox.Y = SPRITE_CHAR_H;
 	}
@@ -33,12 +33,12 @@ void init_entity(struct Entity* entity, ALLEGRO_BITMAP* sprite, ALLEGRO_DISPLAY*
 }
 
 bool check_entity_colision(struct Entity player, struct Entity enemy) {
-	if (player.position.X == enemy.position.X || player.position.Y == enemy.position.Y) return YES;
+	if (player.position.X + 10 == enemy.position.X) return YES;
 	return NO;
 }
 
-void move_entity(struct Entity* entity, struct Map map) {
-	if (entity->isMoving == YES && entity->type == PLAYER) {
+void move_entity(struct Entity* entity) {
+	if (entity->isMoving == YES && (entity->type == PLAYER || entity->type == ZOMBIE)) {
 		entity->animation = RUNNING;
 		switch (entity->move)
 		{
@@ -53,17 +53,13 @@ void move_entity(struct Entity* entity, struct Map map) {
 			}
 			break;
 		case LEFT:
-			if (entity->type == PLAYER) {
-				if (entity->position.X > 0 - entity->hitbox.X) {
-					entity->position.X -= entity->speed;
-				}
+			if (entity->position.X > 0 - entity->hitbox.X) {
+				entity->position.X -= entity->speed;
 			}
 			break;
 		case RIGHT:
-			if (entity->type == PLAYER) {
-				if (entity->position.X < WIDTH - entity->hitbox.X) {
-					entity->position.X += entity->speed;
-				}
+			if (entity->position.X < WIDTH - entity->hitbox.X) {
+				entity->position.X += entity->speed;
 			}
 		}
 	}

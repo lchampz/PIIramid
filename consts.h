@@ -20,15 +20,21 @@
 #define DESCRIPTION_ZOMBIE2 "Um defunto sedento por cerebros, um pouco lento, fedido e bem burro."
 #define DESCRIPTION_ZOMBIE3 "Deve ser por isso que seu maior medo e a SOMA"
 
+#define INTRO "Seu nome e Tony, um explorador avido por novas descober-"
+#define INTRO2 "tas. Apos uma carta misteriosa do seu tio, seu espirito de"
+#define INTRO3 "aventura falou mais alto e te levou a uma jornada"
+#define INTRO4 "desconhecida no egito antigo..."
+#define INTRO5 "Voce esta preparado?"
+
 typedef struct {
 	int X;
 	int Y;
 } Coordenades;
 
 typedef struct {
-	Coordenades initial;
 	Coordenades final;
 	bool done;
+	Coordenades actual;
 } Animation;
 
 enum YesOrNo {

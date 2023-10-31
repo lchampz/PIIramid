@@ -41,7 +41,7 @@ void checkQuestion(struct Entity* enemy, struct Entity* player, int* arrAnswer, 
 	for (int i = 0; confront->count > i; i++) arrAnswer[i] = NULL;
 }
 
-void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
+void confront(struct System* sys, struct Entity *player, struct Entity *enemy, int phase) {
 	bool finished = NO;
 	bool draw = YES;
 	int* arrAnswer = malloc(9 * sizeof(int));
@@ -53,8 +53,12 @@ void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 	ALLEGRO_FONT* titleMonster = al_load_font("./assets/font.ttf", 30, 0);
 
 	Coordenades mouse;
-	ALLEGRO_BITMAP* dungeon = al_load_bitmap("./assets/bg_dungeon.png");
+
+	ALLEGRO_BITMAP* dungeon = al_load_bitmap("./assets/sand_dungeon.png");
+	if (phase == 2) dungeon = al_load_bitmap("./assets/bg_dungeon.png");
+
 	ALLEGRO_BITMAP* mummy = al_load_bitmap("./assets/mummy_banner.png");
+	ALLEGRO_BITMAP* zombie = al_load_bitmap("./assets/zombie_banner.png");
 
 	Button btnMultiply = { .placeholder = "Multiplicação" };
 	btnMultiply.bitmap = al_load_bitmap("./assets/btnBase.png");
@@ -258,6 +262,9 @@ void confront(struct System* sys, struct Entity *player, struct Entity *enemy) {
 
 			if (enemy->type == MUMMY) {
 				al_draw_bitmap(mummy, 800, 130, 0);
+			}
+			if (enemy->type == ZOMBIE) {
+				al_draw_bitmap(zombie, 800, 170, 0);
 			}
 
 			al_draw_filled_rectangle(0, 450, WIDTH, HEIGHT, al_map_rgb(236, 198, 152));

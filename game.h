@@ -52,7 +52,7 @@ void draw_map(struct Map* map);
 int menu(struct System* sys);
 //int explain(System* sys);
 int battle(struct System* sys);
-void confront(struct System* sys, struct Entity *player, struct Entity *enemy);
+void confront(struct System* sys, struct Entity *player, struct Entity *enemy, int phase);
 //int over(System* sys); 
 
 

@@ -71,3 +71,55 @@ pub fn sphinx() -> MonsterSpec {
         special_attack_name: "Julgamento da Esfinge",
     }
 }
+
+/// RFC-008: quinto monstro, o "boss cumulativo" depois dos quatro. A
+/// fraqueza (`Weakness::DuploSelo`) nao ensina conceito novo -- exige que
+/// as duas licoes ja dadas separadamente por `beetle()` (postura) e
+/// `sphinx()` (inspecao) valham ao mesmo tempo. Vida e orcamento mais
+/// altos que os 4 atuais (80-140 / 8-24), calibrados e provados pelo teste
+/// `duplo_selo_reference_script_wins_within_calibrated_budget`
+/// (`src/script/vm.rs`): 10 ciclos cabem o script de referencia
+/// (inspecionar + if + atacar = 6 no pior caso) sem sobra excessiva, e sem
+/// apertar tanto que a composicao pareca impossivel.
+pub fn guardiao() -> MonsterSpec {
+    MonsterSpec {
+        title: "Aker",
+        room: "Camara do Duplo Limiar",
+        description: [
+            "Guarda duas portas gemeas do horizonte: ontem e amanha.",
+            "So abre as duas ao mesmo tempo - nunca uma antes da outra.",
+        ],
+        max_life: 150,
+        cycle_budget: 10,
+        weakness: Weakness::DuploSelo,
+        base_damage: 9,
+        attack_name: "Mordida do Horizonte",
+        special_attack_name: "Selo dos Dois Sois",
+    }
+}
+
+/// RFC-012: sexto monstro, primeira fraqueza que julga a *forma* do script
+/// (de onde saiu o `atacar()`), nao o estado do combate. Vida 150 e
+/// orcamento 16 calibrados pelo teste
+/// `exige_nomeacao_named_func_beats_naive_spam_in_fewer_turns`
+/// (`src/script/vm.rs`): com o divisor `/4` de `resolve_attack`, a
+/// estrategia correta (`func` com um `atacar()` dentro, chamada
+/// repetidamente) fecha o combate em bem menos turnos que o spam ingenuo de
+/// `atacar()` solto no corpo principal -- a mesma disciplina de teste de
+/// ordenação que a RFC-011 exigiu depois do fato, aqui desde o inicio.
+pub fn sentinela() -> MonsterSpec {
+    MonsterSpec {
+        title: "Apagado",
+        room: "Camara das Palavras Verdadeiras",
+        description: [
+            "Um escriba cujo proprio nome a piramide riscou da pedra.",
+            "Para ele, o que nao tem nome nunca aconteceu de verdade.",
+        ],
+        max_life: 150,
+        cycle_budget: 16,
+        weakness: Weakness::ExigeNomeacao,
+        base_damage: 8,
+        attack_name: "Traco Riscado",
+        special_attack_name: "Veredito do Nome Verdadeiro",
+    }
+}

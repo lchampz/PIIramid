@@ -4,6 +4,7 @@
 
 mod assets;
 mod config;
+mod inventory;
 mod monsters;
 mod scenes;
 mod script;
@@ -25,7 +26,7 @@ enum Scene {
     Menu(MenuScene),
     Overworld(Box<OverworldScene>),
     GameOver(GameOverScene),
-    Grimoire(GrimoireScene),
+    Grimoire(Box<GrimoireScene>),
     StyleGuide(StyleGuideScene),
 }
 
@@ -55,10 +56,10 @@ async fn main() {
 
         if let Some(t) = transition {
             match t {
-                Transition::GoToOverworld => scene = Scene::Overworld(Box::new(OverworldScene::new())),
+                Transition::GoToOverworld { save } => scene = Scene::Overworld(Box::new(OverworldScene::new(*save))),
                 Transition::GoToGameOver { won, turns, player_hp } => scene = Scene::GameOver(GameOverScene::new(won, turns, player_hp)),
                 Transition::GoToMenu => scene = Scene::Menu(MenuScene::new(&assets)),
-                Transition::GoToGrimoire => scene = Scene::Grimoire(GrimoireScene::new()),
+                Transition::GoToGrimoire => scene = Scene::Grimoire(Box::new(GrimoireScene::new())),
                 Transition::GoToStyleGuide => scene = Scene::StyleGuide(StyleGuideScene::new()),
                 Transition::Quit => break,
             }

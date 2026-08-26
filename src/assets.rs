@@ -21,12 +21,16 @@ pub struct Assets {
     pub sprite_zombie: Texture2D,
     pub sprite_beetle: Texture2D,
     pub sprite_sphinx: Texture2D,
+    pub sprite_guardiao: Texture2D,
+    pub sprite_sentinela: Texture2D,
 
     pub portrait_player: Texture2D,
     pub portrait_mummy: Texture2D,
     pub portrait_zombie: Texture2D,
     pub portrait_beetle: Texture2D,
     pub portrait_sphinx: Texture2D,
+    pub portrait_guardiao: Texture2D,
+    pub portrait_sentinela: Texture2D,
 
     pub icon_espada: Texture2D,
     pub icon_magia: Texture2D,
@@ -67,12 +71,16 @@ impl Assets {
             sprite_zombie: load_pixel_texture("./assets/monsters/zombie.png").await,
             sprite_beetle: load_pixel_texture("./assets/monsters/beetle.png").await,
             sprite_sphinx: load_pixel_texture("./assets/monsters/sphinx.png").await,
+            sprite_guardiao: load_pixel_texture("./assets/monsters/guardiao.png").await,
+            sprite_sentinela: load_pixel_texture("./assets/monsters/sentinela.png").await,
 
             portrait_player: load_pixel_texture("./assets/portraits/player.png").await,
             portrait_mummy: load_pixel_texture("./assets/portraits/mummy.png").await,
             portrait_zombie: load_pixel_texture("./assets/portraits/zombie.png").await,
             portrait_beetle: load_pixel_texture("./assets/portraits/beetle.png").await,
             portrait_sphinx: load_pixel_texture("./assets/portraits/sphinx.png").await,
+            portrait_guardiao: load_pixel_texture("./assets/portraits/guardiao.png").await,
+            portrait_sentinela: load_pixel_texture("./assets/portraits/sentinela.png").await,
 
             icon_espada: load_pixel_texture("./assets/icons/espada.png").await,
             icon_magia: load_pixel_texture("./assets/icons/magia.png").await,
@@ -95,6 +103,8 @@ impl Assets {
             Kind::Zombie => &self.sprite_zombie,
             Kind::Beetle => &self.sprite_beetle,
             Kind::Sphinx => &self.sprite_sphinx,
+            Kind::Guardiao => &self.sprite_guardiao,
+            Kind::Sentinela => &self.sprite_sentinela,
         }
     }
 
@@ -114,6 +124,8 @@ impl Assets {
             Kind::Zombie => &self.portrait_zombie,
             Kind::Beetle => &self.portrait_beetle,
             Kind::Sphinx => &self.portrait_sphinx,
+            Kind::Guardiao => &self.portrait_guardiao,
+            Kind::Sentinela => &self.portrait_sentinela,
         }
     }
 }

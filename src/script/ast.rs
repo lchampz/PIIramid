@@ -57,4 +57,8 @@ pub enum StmtKind {
     If { cond: Expr, then_branch: Vec<Stmt>, else_branch: Option<Vec<Stmt>> },
     While { cond: Expr, body: Vec<Stmt> },
     For { var: String, from: Expr, to: Expr, body: Vec<Stmt> },
+    /// `func nome():` / `func nome() {` — bloco nomeado sem parâmetro
+    /// (RFC-006). Declarar não executa nada; só a invocação (`Expr::Call`
+    /// pelo mesmo `nome`) roda o corpo e cobra ciclo.
+    FuncDef { name: String, body: Vec<Stmt> },
 }

@@ -6,15 +6,45 @@ use macroquad::prelude::*;
 
 use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
+use crate::inventory::SaveData;
 use crate::scenes::Transition;
 use crate::ui::theme;
 
 const LEFT_W: f32 = 620.0;
 
+/// Ação de cada item do menu, mais leve que `Transition` (que agora carrega
+/// `SaveData` — RFC-002). `items()` roda todo frame só pra detectar hover;
+/// construir `Transition::GoToOverworld` ali significaria ler/zerar o save
+/// a cada frame com o menu aberto. A leitura de disco só acontece dentro de
+/// `resolve()`, chamada uma única vez, no clique.
+#[derive(Clone, Copy)]
+enum MenuAction {
+    /// RFC-002, regra 4: "Nova Expedição" -> save vazio; "Continuar" ->
+    /// save carregado do disco (ou vazio, se ausente/corrompido).
+    Overworld { fresh: bool },
+    Grimoire,
+    StyleGuide,
+    Quit,
+}
+
+impl MenuAction {
+    fn resolve(self) -> Transition {
+        match self {
+            MenuAction::Overworld { fresh } => {
+                let save = if fresh { SaveData::default() } else { SaveData::load() };
+                Transition::GoToOverworld { save: Box::new(save) }
+            }
+            MenuAction::Grimoire => Transition::GoToGrimoire,
+            MenuAction::StyleGuide => Transition::GoToStyleGuide,
+            MenuAction::Quit => Transition::Quit,
+        }
+    }
+}
+
 struct MenuItem {
     key: &'static str,
     label: &'static str,
-    transition: Option<Transition>,
+    action: Option<MenuAction>,
 }
 
 pub struct MenuScene {
@@ -28,11 +58,11 @@ impl MenuScene {
 
     fn items() -> Vec<MenuItem> {
         vec![
-            MenuItem { key: "01", label: "NOVA EXPEDICAO", transition: Some(Transition::GoToOverworld) },
-            MenuItem { key: "02", label: "CONTINUAR", transition: Some(Transition::GoToOverworld) },
-            MenuItem { key: "03", label: "GRIMORIO", transition: Some(Transition::GoToGrimoire) },
-            MenuItem { key: "04", label: "GUIA DE ESTILO", transition: Some(Transition::GoToStyleGuide) },
-            MenuItem { key: "05", label: "SAIR DA PIRAMIDE", transition: Some(Transition::Quit) },
+            MenuItem { key: "01", label: "NOVA EXPEDICAO", action: Some(MenuAction::Overworld { fresh: true }) },
+            MenuItem { key: "02", label: "CONTINUAR", action: Some(MenuAction::Overworld { fresh: false }) },
+            MenuItem { key: "03", label: "GRIMORIO", action: Some(MenuAction::Grimoire) },
+            MenuItem { key: "04", label: "GUIA DE ESTILO", action: Some(MenuAction::StyleGuide) },
+            MenuItem { key: "05", label: "SAIR DA PIRAMIDE", action: Some(MenuAction::Quit) },
         ]
     }
 
@@ -54,7 +84,7 @@ impl MenuScene {
         if is_mouse_button_pressed(MouseButton::Left) {
             if let Some(i) = self.hovered {
                 let mut items = Self::items();
-                return items.remove(i).transition;
+                return items.remove(i).action.map(MenuAction::resolve);
             }
         }
         None

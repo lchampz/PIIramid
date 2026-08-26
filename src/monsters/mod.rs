@@ -60,6 +60,20 @@ pub enum Weakness {
     Eficiencia { max_ciclos: u32 },
     /// imune a dano até `inspecionar()` ser chamado neste turno
     RequerInspecao,
+    /// composição das duas fraquezas de estado já existentes: só toma dano
+    /// cheio quando a postura está em "guarda" **e** `inspecionar()` já foi
+    /// chamado neste turno — nenhuma condição isolada basta. É o "boss
+    /// cumulativo": testa se o jogador sabe compor duas lições separadas
+    /// (`ExigeGuarda`, `RequerInspecao`) com `and`, em vez de escolher uma.
+    DuploSelo,
+    /// RFC-012: primeira fraqueza que julga a *forma* do script, não o
+    /// estado do combate. Só toma dano cheio quando `atacar()` roda de
+    /// dentro de uma `func` nomeada pelo jogador (`Vm::depth > 0` no
+    /// momento do golpe, RFC-006); o mesmo ataque solto no corpo principal
+    /// do script (`depth == 0`) causa dano reduzido. Nomear o golpe é a
+    /// lição, não estruturar em profundidade — qualquer `func` com um
+    /// `atacar()` dentro já resolve.
+    ExigeNomeacao,
 }
 
 impl Weakness {
@@ -73,6 +87,8 @@ impl Weakness {
             Weakness::ExigeGuarda => "EXPOSTO NA GUARDA",
             Weakness::Eficiencia { .. } => "PUNE CICLOS ALTOS",
             Weakness::RequerInspecao => "OCULTA A FRAQUEZA",
+            Weakness::DuploSelo => "EXIGE GUARDA E INSPECAO",
+            Weakness::ExigeNomeacao => "SO RESPEITA GOLPE NOMEADO",
         }
     }
 }

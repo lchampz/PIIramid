@@ -6,6 +6,7 @@
 use macroquad::prelude::*;
 
 use crate::assets::Assets;
+use crate::inventory::SaveData;
 use crate::monsters::data;
 use crate::monsters::MonsterState;
 use crate::scenes::duel::{DuelOutcome, DuelScene};
@@ -25,10 +26,14 @@ pub struct OverworldScene {
     player: Entity,
     foes: Vec<Foe>,
     duel: Option<(usize, DuelScene)>,
+    /// Inventário/scripts do jogador (RFC-002). Vive aqui — não em
+    /// `DuelScene` — porque sobrevive a todos os duelos da expedição, não
+    /// só ao atual; é emprestado ao duelo em andamento por `update`.
+    save: SaveData,
 }
 
 impl OverworldScene {
-    pub fn new() -> Self {
+    pub fn new(save: SaveData) -> Self {
         let map = TileMap::load("./assets/map.txt").expect("mapa invalido");
 
         let mut player = Entity::new(Kind::Player, true);
@@ -39,23 +44,50 @@ impl OverworldScene {
             spawn(Kind::Zombie, data::zombie(), vec2(650.0, 350.0)),
             spawn(Kind::Beetle, data::beetle(), vec2(300.0, 500.0)),
             spawn(Kind::Sphinx, data::sphinx(), vec2(550.0, 560.0)),
+            // RFC-008: `assets/map.txt` declara 23x40 tiles (32px), sem
+            // parede interna -- so a borda tem colisao
+            // (world/tilemap.rs::Tile::has_collision) -- mas a area
+            // efetivamente alcancavel pelo jogador e menor: o clamp de
+            // `Entity::move_and_collide` (world/entity.rs) trava o
+            // jogador em x em [0, WIDTH-64] e y em [0, HEIGHT-64], ou
+            // seja y <= 656 (WIDTH/HEIGHT = 1280x720, config.rs), bem
+            // antes da borda inferior do mapa (linha 39, y=1248). Um
+            // Guardiao em y=850, por exemplo, ficaria fora do alcance do
+            // jogador -- por isso a posicao abaixo fica dentro de
+            // [32, 704]x[32, 656] (piso interior x alcance do jogador),
+            // com hitbox 64x64 (SPRITE_FRAME) e margem > 100px dos outros
+            // 4 (y entre 200 e 560) e do spawn do jogador (200,300).
+            spawn(Kind::Guardiao, data::guardiao(), vec2(150.0, 640.0)),
+            // RFC-012: mesma area alcancavel do comentario acima
+            // ([32,1184]x[32,656] de piso dentro do clamp de movimento).
+            // x=900 fica a >250px de todos os outros 5 spawns em ambos os
+            // eixos e a >700px do Guardiao (mesmo y=640), sem tocar a
+            // parede da borda inferior (y+64=704 == borda, igual ao
+            // Guardiao, que ja funciona nessa mesma linha).
+            spawn(Kind::Sentinela, data::sentinela(), vec2(900.0, 640.0)),
         ];
 
-        OverworldScene { map, player, foes, duel: None }
+        OverworldScene { map, player, foes, duel: None, save }
     }
 
     pub fn update(&mut self) -> Option<Transition> {
         if let Some((idx, mut duel)) = self.duel.take() {
             let foe = &mut self.foes[idx];
-            let outcome = duel.update(&mut self.player, &mut foe.state);
+            let outcome = duel.update(&mut self.player, &mut foe.state, &mut self.save);
             match outcome {
                 Some(DuelOutcome::Won) => {
                     foe.defeated = true;
                     if self.foes.iter().all(|f| f.defeated) {
+                        // RFC-002 regra 4: o save é sobrescrito quando o
+                        // jogador sai do overworld/duelo de verdade (aqui,
+                        // ao vencer a expedição) -- nunca só por navegar o
+                        // menu.
+                        self.save.save();
                         return Some(Transition::GoToGameOver { won: true, turns: duel.turn(), player_hp: self.player.life_points });
                     }
                 }
                 Some(DuelOutcome::Lost) => {
+                    self.save.save();
                     return Some(Transition::GoToGameOver { won: false, turns: duel.turn(), player_hp: self.player.life_points });
                 }
                 Some(DuelOutcome::Fled) => {}

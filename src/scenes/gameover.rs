@@ -6,6 +6,7 @@ use macroquad::prelude::*;
 
 use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
+use crate::inventory::SaveData;
 use crate::scenes::Transition;
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::theme;
@@ -44,7 +45,11 @@ impl GameOverScene {
         self.btn_menu.update_hover(mouse);
 
         if self.btn_restart.clicked(mouse) {
-            return Some(Transition::GoToOverworld);
+            // RFC-002: `OverworldScene::update` já persistiu o save antes
+            // de chegar aqui (vitória ou derrota) -- recarregar do disco é
+            // o que faz "tentar de novo"/"proxima camara" manter
+            // inventario e scripts em vez de voltar para vazio.
+            return Some(Transition::GoToOverworld { save: Box::new(SaveData::load()) });
         }
         if self.btn_menu.clicked(mouse) {
             return Some(Transition::GoToMenu);

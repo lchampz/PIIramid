@@ -4,15 +4,18 @@
 //! flutuante, dossiê do monstro com tags de fraqueza e barra de
 //! intenção/carga, log de eventos colorido por categoria.
 
+use std::collections::HashMap;
+
 use macroquad::prelude::*;
 
 use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
+use crate::inventory::{SaveData, SavedScript};
 use crate::monsters::MonsterState;
 use crate::script::api;
 use crate::script::error::ScriptError;
 use crate::script::parser;
-use crate::script::value::ItemKind;
+use crate::script::value::{ItemKind, Value};
 use crate::script::vm::{self, TurnEvent, TurnResult};
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::code_editor::CodeEditor;
@@ -53,6 +56,17 @@ struct HitPopup {
     timer: f32,
 }
 
+/// RFC-009 regra 3: estado por cartão de comando — hover atualizado todo
+/// frame e um flash de clique com timer próprio, no mesmo padrão do
+/// `HitPopup` acima (nasce no evento discreto, expira sozinho).
+#[derive(Clone, Copy, Default)]
+struct CommandCardState {
+    hovered: bool,
+    flash: Option<f32>,
+}
+
+const COMMAND_FLASH_SECONDS: f32 = 0.12;
+
 struct CommandEntry {
     label: &'static str,
     snippet: &'static str,
@@ -82,6 +96,16 @@ pub struct DuelScene {
     btn_execute: Button,
     btn_leave: Button,
     btn_clear: Button,
+    /// RFC-002, regra 10: grava o texto atual do editor em
+    /// `SaveData::scripts`. Fica ao lado de `btn_clear` no mesmo padrão
+    /// visual (botão pequeno no topo do editor).
+    btn_save_script: Button,
+    command_cards: Vec<CommandCardState>,
+    /// Variáveis do jogador que sobrevivem entre turnos do mesmo duelo
+    /// (RFC-010). Vazio ao entrar no duelo e descartado junto com a cena
+    /// ao sair dele — é assim que "nunca entre duelos diferentes"
+    /// (não-objetivo 1 da RFC) é cumprido sem lógica de limpeza explícita.
+    player_vars: HashMap<String, Value>,
 }
 
 impl DuelScene {
@@ -95,6 +119,9 @@ impl DuelScene {
             btn_execute: Button::new("EXECUTAR", vec2(10.0, BUTTONS_Y), vec2(EDITOR_W - 20.0 - 110.0, 56.0), ButtonStyle::Primary, theme::TITLE_SM),
             btn_leave: Button::new("FUGIR", vec2(10.0 + EDITOR_W - 20.0 - 100.0, BUTTONS_Y), vec2(100.0, 56.0), ButtonStyle::Secondary, theme::TITLE_SM),
             btn_clear: Button::new("LIMPAR", vec2(EDITOR_W - 90.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
+            btn_save_script: Button::new("SALVAR", vec2(EDITOR_W - 90.0 - 86.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
+            command_cards: vec![CommandCardState::default(); COMMANDS.len()],
+            player_vars: HashMap::new(),
         }
     }
 
@@ -109,16 +136,31 @@ impl DuelScene {
         Rect::new(10.0 + col * (w + 8.0), COMMAND_PANEL_Y + 26.0 + row * (COMMAND_ROW_H + COMMAND_ROW_GAP), w, COMMAND_ROW_H)
     }
 
-    pub fn update(&mut self, player: &mut Entity, monster: &mut MonsterState) -> Option<DuelOutcome> {
+    pub fn update(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &mut SaveData) -> Option<DuelOutcome> {
         let mouse: Vec2 = mouse_position().into();
         self.btn_execute.update_hover(mouse);
         self.btn_leave.update_hover(mouse);
         self.btn_clear.update_hover(mouse);
+        self.btn_save_script.update_hover(mouse);
+        // regra 2: Executar fica desabilitado enquanto o turno está sendo
+        // reproduzido — a proteção mora no próprio Button, não espalhada.
+        self.btn_execute.disabled = matches!(self.phase, Phase::Executing { .. });
 
         if let Some(hit) = &mut self.hit {
             hit.timer += get_frame_time();
             if hit.timer > 1.1 {
                 self.hit = None;
+            }
+        }
+
+        // regra 3: o flash de clique decai independente da fase corrente,
+        // mesmo padrão do timer de `hit` acima.
+        for card in self.command_cards.iter_mut() {
+            if let Some(t) = &mut card.flash {
+                *t += get_frame_time();
+                if *t > COMMAND_FLASH_SECONDS {
+                    card.flash = None;
+                }
             }
         }
 
@@ -128,14 +170,24 @@ impl DuelScene {
         if self.btn_clear.clicked(mouse) {
             self.editor.clear();
         }
+        if self.btn_save_script.clicked(mouse) {
+            self.save_current_script(save);
+        }
 
         let writing = matches!(self.phase, Phase::Writing | Phase::Error(_));
         if writing {
             for (i, cmd) in COMMANDS.iter().enumerate() {
                 let r = Self::command_rect(i);
-                if r.contains(mouse) && is_mouse_button_pressed(MouseButton::Left) {
+                let card = &mut self.command_cards[i];
+                card.hovered = r.contains(mouse);
+                if card.hovered && is_mouse_button_pressed(MouseButton::Left) {
                     self.editor.insert_snippet(cmd.snippet);
+                    card.flash = Some(0.0);
                 }
+            }
+        } else {
+            for card in self.command_cards.iter_mut() {
+                card.hovered = false;
             }
         }
 
@@ -144,7 +196,7 @@ impl DuelScene {
                 self.editor.update();
                 let want_run = self.btn_execute.clicked(mouse) || is_key_pressed(KeyCode::F5);
                 if want_run {
-                    self.run_script(player, monster);
+                    self.run_script(player, monster, save);
                 }
             }
             Phase::Executing { result, index, timer } => {
@@ -183,7 +235,30 @@ impl DuelScene {
         None
     }
 
-    fn run_script(&mut self, player: &mut Entity, monster: &mut MonsterState) {
+    /// RFC-002, regra 10: grava o conteúdo atual do editor
+    /// (`CodeEditor::text()`) como um novo `SavedScript` no `SaveData` da
+    /// expedição. Persiste no disco imediatamente (não só ao sair do
+    /// overworld/duelo, como o resto do save) porque um clique explícito
+    /// de "salvar" é a única ação desta RFC que o jogador pode esperar
+    /// sobreviver mesmo se ele fugir do duelo em seguida (fuga não é um
+    /// dos gatilhos de persistência do overworld) — perder um script que
+    /// o próprio jogador mandou salvar seria pior que o custo de um write
+    /// extra fora do loop de frame (é um clique, não algo por frame).
+    /// Script vazio não gera entrada: não há nada útil pra nomear/carregar
+    /// depois.
+    fn save_current_script(&mut self, save: &mut SaveData) {
+        let body = self.editor.text();
+        if body.trim().is_empty() {
+            self.log.push(("Nada para salvar: o editor esta vazio.".to_string(), theme::POEIRA));
+            return;
+        }
+        let name = format!("script-{}.pii", save.scripts.len() + 1);
+        self.log.push((format!("Script salvo no grimorio: {name}"), theme::MUSGO));
+        save.scripts.push(SavedScript { name, body });
+        save.save();
+    }
+
+    fn run_script(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &SaveData) {
         self.turn += 1;
         monster.begin_turn();
         let special_ready = monster.special_ready();
@@ -197,8 +272,9 @@ impl DuelScene {
             }
         };
 
-        let result = vm::run_turn(
+        let result = vm::run_turn_with_loadout_and_class(
             &program,
+            &mut self.player_vars,
             monster.spec.cycle_budget,
             player.life_points,
             player.max_life,
@@ -208,6 +284,8 @@ impl DuelScene {
             monster.spec.weakness,
             monster.spec.base_damage,
             special_ready,
+            Some(&save.loadout),
+            save.player_class,
         );
 
         match result {
@@ -261,7 +339,11 @@ impl DuelScene {
         );
         draw_rectangle(cyc_x + 70.0, 16.0, 150.0, 20.0, theme::TUMBA);
         let ratio = (cost as f32 / budget.max(1) as f32).clamp(0.0, 1.0);
-        draw_rectangle(cyc_x + 70.0, 16.0, 150.0 * ratio, 20.0, theme::ESCARAVELHO);
+        // regra 1: o preenchimento herda o mesmo alerta que já colore o
+        // número — antes só o texto virava SANGUE, a barra cheia (o
+        // elemento mais visível) ficava muda sobre o estouro.
+        let fill_color = if over { theme::SANGUE } else { theme::ESCARAVELHO };
+        draw_rectangle(cyc_x + 70.0, 16.0, 150.0 * ratio, 20.0, fill_color);
         draw_rectangle_lines(cyc_x + 70.0, 16.0, 150.0, 20.0, 2.0, theme::AREIA_ESCURA);
         draw_text_ex(
             format!("{cost}/{budget}"),
@@ -285,9 +367,10 @@ impl DuelScene {
             format!("{} LINHAS", self.editor.lines.len()),
             140.0,
             box_y + 20.0,
-            TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::AREIA_ESCURA, ..Default::default() },
+            TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::POEIRA, ..Default::default() },
         );
         self.btn_clear.draw(&assets.font_body);
+        self.btn_save_script.draw(&assets.font_body);
 
         self.draw_code_lines(assets, box_y + 36.0, box_h - 68.0);
 
@@ -295,7 +378,7 @@ impl DuelScene {
         let bar_y = box_y + box_h - 32.0;
         draw_rectangle(0.0, bar_y, EDITOR_W - 20.0, 32.0, err_bg);
         draw_rectangle(0.0, bar_y, EDITOR_W - 20.0, 3.0, err_border);
-        draw_text_ex(&err_text, 10.0, bar_y + 21.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: err_color, ..Default::default() });
+        draw_text_ex(&err_text, 10.0, bar_y + 21.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: err_color, ..Default::default() });
 
         self.draw_command_palette(assets, box_y + box_h + 12.0);
 
@@ -305,24 +388,40 @@ impl DuelScene {
 
     fn error_bar_style(&self) -> (Color, Color, Color, String) {
         match &self.phase {
-            Phase::Error(e) => (theme::DANGER_BG, theme::SANGUE, Color::new(0.94, 0.66, 0.6, 1.0), format!("{e}")),
-            _ => (theme::OK_BG, theme::TIJOLO, theme::MUSGO, "SINTAXE OK - PRONTO PARA EXECUTAR".to_string()),
+            // regra 6: SANGUE e exclusiva de dano/erro; o texto de erro
+            // agora usa a cor do contrato em vez de um tom pastel a parte.
+            Phase::Error(e) => (theme::DANGER_BG, theme::SANGUE, theme::SANGUE, format!("{e}")),
+            // regra 7: MUSGO fica exclusiva do token de valor no editor —
+            // "sintaxe ok" e um estado de sucesso, isso e VIDA.
+            _ => (theme::OK_BG, theme::TIJOLO, theme::VIDA, "SINTAXE OK - PRONTO PARA EXECUTAR".to_string()),
         }
     }
 
     fn draw_code_lines(&self, assets: &Assets, y0: f32, h: f32) {
         let line_h = 22.0;
         let max_lines = (h / line_h).floor() as usize;
+        // regra 4: `ScriptError::line` é 1-indexado (mesma convenção de
+        // `TurnEvent`, ver `event_line` abaixo) — ajusta pro índice do
+        // vetor de linhas do editor, que é 0-indexado.
+        let error_line = match &self.phase {
+            Phase::Error(e) => Some(e.line.saturating_sub(1)),
+            _ => None,
+        };
         for (i, line) in self.editor.lines.iter().enumerate().take(max_lines) {
             let y = y0 + i as f32 * line_h + 16.0;
             if Some(i) == self.editor.highlighted_line {
                 draw_rectangle(0.0, y - 16.0, EDITOR_W - 20.0, line_h, Color::new(0.95, 0.8, 0.3, 0.15));
+            } else if Some(i) == error_line {
+                // mesma máscara de destaque da linha em execução, mas na
+                // cor de erro do contrato (SANGUE a 15%) — Phase::Error e
+                // Phase::Executing nunca coexistem, então não há conflito.
+                draw_rectangle(0.0, y - 16.0, EDITOR_W - 20.0, line_h, Color::new(theme::SANGUE.r, theme::SANGUE.g, theme::SANGUE.b, 0.15));
             }
             draw_text_ex(
                 format!("{:02}", i + 1),
                 6.0,
                 y,
-                TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::AREIA_ESCURA, ..Default::default() },
+                TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::POEIRA, ..Default::default() },
             );
             let mut x = 34.0;
             for (token, color) in highlight_line(line) {
@@ -347,15 +446,25 @@ impl DuelScene {
         );
         for (i, cmd) in COMMANDS.iter().enumerate() {
             let r = Self::command_rect(i);
+            let card = &self.command_cards[i];
+            // regra 3: flash de clique (OURO) tem prioridade sobre hover
+            // (POEIRA), que tem prioridade sobre o repouso (TIJOLO).
+            let border = if card.flash.is_some() {
+                theme::OURO
+            } else if card.hovered {
+                theme::POEIRA
+            } else {
+                theme::TIJOLO
+            };
             draw_rectangle(r.x, r.y, r.w, r.h, theme::PEDRA);
-            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, theme::TIJOLO);
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, border);
             draw_text_ex(cmd.label, r.x + 8.0, r.y + 21.0, TextParams { font: Some(&assets.font_body), font_size: 14, color: theme::ESCARAVELHO, ..Default::default() });
             let cost_dims = measure_text(cmd.cost_label, Some(&assets.font_body), 12, 1.0);
             draw_text_ex(
                 cmd.cost_label,
                 r.x + r.w - cost_dims.width - 8.0,
                 r.y + 21.0,
-                TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::AREIA_ESCURA, ..Default::default() },
+                TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::POEIRA, ..Default::default() },
             );
         }
     }
@@ -393,7 +502,9 @@ impl DuelScene {
         let foe_x = ARENA_X + ARENA_W - foe_size - 60.0;
         let foe_y = HEIGHT - 260.0 + foe_bob;
         draw_rectangle(foe_x, foe_y, foe_size, foe_size, theme::PEDRA);
-        draw_rectangle_lines(foe_x, foe_y, foe_size, foe_size, 3.0, theme::SANGUE);
+        // regra 6: identidade do inimigo (moldura do retrato) e neutra —
+        // SANGUE fica exclusiva de dano/erro, nao de "isto e o inimigo".
+        draw_rectangle_lines(foe_x, foe_y, foe_size, foe_size, 3.0, theme::TIJOLO);
         draw_texture_ex(
             assets.portrait_for(foe_kind),
             foe_x,
@@ -403,14 +514,18 @@ impl DuelScene {
         );
         let tag = monster.spec.weakness.label();
         let tag_dims = measure_text(tag, Some(&assets.font_body), 13, 1.0);
-        draw_rectangle(foe_x - 4.0, foe_y - 4.0, tag_dims.width + 12.0, 22.0, theme::SANGUE);
-        draw_text_ex(tag, foe_x + 2.0, foe_y + 12.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::TUMBA, ..Default::default() });
+        // regra 4 + 6: AREIA_ESCURA em seu papel real (preenchimento de
+        // superficie elevada) para a etiqueta de fraqueza, em vez de
+        // SANGUE (que agora e exclusiva de dano/erro).
+        draw_rectangle(foe_x - 4.0, foe_y - 4.0, tag_dims.width + 12.0, 22.0, theme::AREIA_ESCURA);
+        draw_text_ex(tag, foe_x + 2.0, foe_y + 12.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::PAPIRO, ..Default::default() });
 
         if let Some(hit) = &self.hit {
             let progress = (hit.timer / 1.1).clamp(0.0, 1.0);
             let rise = progress * 64.0;
             let alpha = (1.0 - progress).clamp(0.0, 1.0);
-            let color = if hit.special { theme::OURO } else { Color::new(0.94, 0.66, 0.6, alpha) };
+            // dano no popup flutuante e o papel canonico de SANGUE.
+            let color = if hit.special { theme::OURO } else { Color::new(theme::SANGUE.r, theme::SANGUE.g, theme::SANGUE.b, alpha) };
             let label = format!("-{}", hit.value);
             draw_text_ex(
                 &label,
@@ -445,10 +560,24 @@ impl DuelScene {
 
         let bar_w = 140.0;
         let bar_x = ARENA_X + ARENA_W - 20.0 - bar_w;
+        // regra 9: trilha vazia continua TUMBA.
         draw_rectangle(bar_x, y + 8.0, bar_w, 16.0, theme::TUMBA);
         let ratio = (monster.charge as f32 / crate::monsters::CHARGE_THRESHOLD as f32).clamp(0.0, 1.0);
-        draw_rectangle(bar_x, y + 8.0, bar_w * ratio, 16.0, theme::OURO);
-        draw_rectangle_lines(bar_x, y + 8.0, bar_w, 16.0, 2.0, theme::AREIA_ESCURA);
+        // regra 2: CHAMA e exclusiva de carga/alerta — sai do destaque
+        // de sintaxe e passa a preencher a barra de carga.
+        draw_rectangle(bar_x, y + 8.0, bar_w * ratio, 16.0, theme::CHAMA);
+        // regra 8: com a carga cheia, alem da cor, um segundo canal por
+        // movimento — moldura mais espessa e piscando em cadencia lenta
+        // entre CHAMA/OURO, deterministico pelo tempo (mesmo padrao do
+        // "idle bob" dos retratos). Funciona mesmo pra quem nao distingue
+        // as duas cores: a moldura muda de espessura e de brilho.
+        let (border_color, border_w) = if special {
+            let blink_on = (get_time() * 0.6) as i64 % 2 == 0;
+            (if blink_on { theme::CHAMA } else { theme::OURO }, 4.0)
+        } else {
+            (theme::AREIA_ESCURA, 2.0)
+        };
+        draw_rectangle_lines(bar_x, y + 8.0, bar_w, 16.0, border_w, border_color);
     }
 
     fn draw_dossier_and_log(&self, assets: &Assets, monster: &MonsterState) {
@@ -467,7 +596,9 @@ impl DuelScene {
             format!("POSTURA: {}", monster.posture.as_str().to_uppercase()),
             x + 12.0,
             y,
-            TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() },
+            // regra 3: postura e dado primario, nao destaque — sai de
+            // OURO e passa a PAPIRO.
+            TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::PAPIRO, ..Default::default() },
         );
         y += 22.0;
         draw_text_ex(
@@ -488,9 +619,11 @@ impl DuelScene {
 
         let tag = monster.spec.weakness.label();
         let tag_dims = measure_text(tag, Some(&assets.font_body), 13, 1.0);
-        draw_rectangle(x + 12.0, y, tag_dims.width + 16.0, 24.0, theme::DANGER_BG);
-        draw_rectangle_lines(x + 12.0, y, tag_dims.width + 16.0, 24.0, 2.0, theme::SANGUE);
-        draw_text_ex(tag, x + 20.0, y + 17.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: Color::new(0.94, 0.66, 0.6, 1.0), ..Default::default() });
+        // regra 6: tag de fraqueza e identidade do inimigo, nao dano/erro
+        // — moldura neutra (TIJOLO/AREIA_ESCURA) em vez de SANGUE/DANGER_BG.
+        draw_rectangle(x + 12.0, y, tag_dims.width + 16.0, 24.0, theme::AREIA_ESCURA);
+        draw_rectangle_lines(x + 12.0, y, tag_dims.width + 16.0, 24.0, 2.0, theme::TIJOLO);
+        draw_text_ex(tag, x + 20.0, y + 17.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::PAPIRO, ..Default::default() });
         y += 34.0;
 
         self.draw_item_icons(assets, x + 12.0, y);
@@ -570,7 +703,8 @@ fn estimate_cost(lines: &[String]) -> u32 {
         .sum()
 }
 
-const KEYWORDS: &[&str] = &["if", "else", "while", "for", "in", "and", "or", "not", "e", "ou", "nao", "true", "false"];
+const KEYWORDS: &[&str] =
+    &["if", "else", "while", "for", "func", "in", "and", "or", "not", "e", "ou", "nao", "true", "false"];
 const NATIVE_FUNCS: &[&str] = &["atacar", "defender", "inspecionar", "curar", "esperar"];
 const COLLECTIONS: &[&str] = &["espada", "magia", "escudo", "pocao", "eu", "inimigo"];
 
@@ -617,8 +751,10 @@ fn highlight_line(line: &str) -> Vec<(String, Color)> {
             // enum-style: primeira letra maiuscula (Fogo, Bronze, Vida...)
             // pinta como valor de enum em vez de identificador comum
             let is_enum_value = word.chars().next().is_some_and(|c| c.is_uppercase());
+            // regra 2: CHAMA e exclusiva de carga/alerta — palavra-chave
+            // de controle passa a ESCARAVELHO (informacao, contraste maior).
             let color = if KEYWORDS.contains(&word.to_lowercase().as_str()) {
-                theme::CHAMA
+                theme::ESCARAVELHO
             } else if is_enum_value {
                 theme::MUSGO
             } else if NATIVE_FUNCS.contains(&word.as_str()) || COLLECTIONS.contains(&word.as_str()) {
@@ -691,7 +827,10 @@ fn describe_event(ev: &TurnEvent) -> (String, Color) {
     match ev {
         TurnEvent::Attacked { item, damage, effective, .. } => {
             let hit = if *effective { "acerto em cheio" } else { "de raspao" };
-            (format!("atacar({}.{}) -> {hit}, {damage} de dano", item.kind.label(), enum_case(&item.name)), theme::MUSGO)
+            // regra 7: MUSGO fica exclusiva de token de valor no editor —
+            // ataque efetivo (sucesso) e VIDA; de raspao e neutro (POEIRA).
+            let color = if *effective { theme::VIDA } else { theme::POEIRA };
+            (format!("atacar({}.{}) -> {hit}, {damage} de dano", item.kind.label(), enum_case(&item.name)), color)
         }
         TurnEvent::Defended { item, .. } => (format!("defender({}.{})", item.kind.label(), enum_case(&item.name)), theme::ESCARAVELHO),
         TurnEvent::Inspected { .. } => ("inspecionar() -> fraqueza revelada".to_string(), theme::ESCARAVELHO),

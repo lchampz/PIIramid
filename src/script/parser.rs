@@ -37,6 +37,7 @@ fn describe_token(kind: &TokKind) -> String {
         TokKind::In => "'in'".to_string(),
         TokKind::Func => "'func'".to_string(),
         TokKind::Invocar => "'invocar'".to_string(),
+        TokKind::Selecionar => "'selecionar'".to_string(),
         TokKind::Plus => "'+'".to_string(),
         TokKind::Minus => "'-'".to_string(),
         TokKind::Star => "'*'".to_string(),
@@ -469,6 +470,53 @@ impl Parser {
         Ok(args)
     }
 
+    /// `selecionar` `(` `mochila` `,` `onde` `:` <expr-bool> `,` `limite`
+    /// `:` <expr> `)` (RFC-015, regra 1) — gramática fixa, não reaproveita
+    /// `parse_args`: cada posição (`mochila`, `onde`, `limite`) é exigida
+    /// literalmente e na ordem certa, com erro de sintaxe claro na linha
+    /// quando não bate (não-objetivo 3 da RFC: `mochila` é a única fonte
+    /// hoje, mas a posição já é reservada para uma futura).
+    fn parse_select(&mut self) -> Result<Expr, ScriptError> {
+        self.advance(); // 'selecionar'
+        let open_line = self.line();
+        self.expect(&TokKind::LParen, "apos 'selecionar'")?;
+
+        let source = self.expect_ident()?;
+        if source != "mochila" {
+            return Err(ScriptError::new(
+                self.line(),
+                format!("'selecionar' so aceita 'mochila' como fonte hoje, encontrei '{source}'"),
+            ));
+        }
+        self.expect(&TokKind::Comma, "apos 'mochila' em 'selecionar(mochila, onde: ..., limite: ...)'")?;
+
+        let onde = self.expect_ident()?;
+        if onde != "onde" {
+            return Err(ScriptError::new(
+                self.line(),
+                format!("esperava 'onde:' em 'selecionar(mochila, onde: ..., limite: ...)', encontrei '{onde}'"),
+            ));
+        }
+        self.expect(&TokKind::Colon, "apos 'onde' em 'selecionar(...)'")?;
+        let predicate = self.parse_expr()?;
+
+        self.expect(&TokKind::Comma, "apos a condicao de 'onde:' em 'selecionar(...)'")?;
+
+        let limite = self.expect_ident()?;
+        if limite != "limite" {
+            return Err(ScriptError::new(
+                self.line(),
+                format!("esperava 'limite:' em 'selecionar(mochila, onde: ..., limite: ...)', encontrei '{limite}'"),
+            ));
+        }
+        self.expect(&TokKind::Colon, "apos 'limite' em 'selecionar(...)'")?;
+        let limit = self.parse_expr()?;
+
+        self.expect_closing(&TokKind::RParen, open_line, "fechando 'selecionar(...)'")?;
+
+        Ok(Expr::Select { predicate: Box::new(predicate), limit: Box::new(limit) })
+    }
+
     fn parse_primary(&mut self) -> Result<Expr, ScriptError> {
         match self.peek().clone() {
             TokKind::Number(n) => {
@@ -498,6 +546,7 @@ impl Parser {
                 self.expect_closing(&TokKind::RParen, open_line, "fechando expressao entre parenteses")?;
                 Ok(e)
             }
+            TokKind::Selecionar => self.parse_select(),
             other => Err(ScriptError::new(self.line(), format!("token inesperado: {other:?}"))),
         }
     }
@@ -700,5 +749,38 @@ mod tests {
     fn func_nested_inside_func_is_rejected() {
         let err = parse("func externa():\n    func interna():\n        esperar()\n").unwrap_err();
         assert!(err.message.contains("nivel superior"));
+    }
+
+    // --- RFC-015: selecionar() sobre a mochila ------------------------
+
+    #[test]
+    fn select_produces_select_expr_with_predicate_and_limit() {
+        let stmts = parse("item = selecionar(mochila, onde: item.bonus > 0, limite: 1)\n").unwrap();
+        match &stmts[0].kind {
+            StmtKind::Assign(name, Expr::Select { predicate, limit }) => {
+                assert_eq!(name, "item");
+                assert!(matches!(**predicate, Expr::Binary(_, BinOp::Gt, _)));
+                assert!(matches!(**limit, Expr::Number(n) if n == 1.0));
+            }
+            other => panic!("unexpected stmt: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_source_other_than_mochila_is_a_clear_syntax_error() {
+        let err = parse("selecionar(armario, onde: true, limite: 1)\n").unwrap_err();
+        assert!(err.message.contains("mochila"));
+    }
+
+    #[test]
+    fn select_missing_onde_label_is_a_clear_syntax_error() {
+        let err = parse("selecionar(mochila, item.bonus > 0, limite: 1)\n").unwrap_err();
+        assert!(err.message.contains("onde"));
+    }
+
+    #[test]
+    fn select_missing_limite_label_is_a_clear_syntax_error() {
+        let err = parse("selecionar(mochila, onde: true, quantidade: 1)\n").unwrap_err();
+        assert!(err.message.contains("limite"));
     }
 }

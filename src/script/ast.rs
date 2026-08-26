@@ -19,6 +19,11 @@ pub enum Expr {
     Call(String, Vec<Expr>),
     Unary(UnaryOp, Box<Expr>),
     Binary(Box<Expr>, BinOp, Box<Expr>),
+    /// `selecionar(mochila, onde: <predicate>, limite: <limit>)` (RFC-015).
+    /// `mochila` não é armazenada: é a única fonte suportada (não-objetivo
+    /// 3 da RFC), fixa pela gramática. Sempre resolve para um único
+    /// `Value::Item` ou `Value::Nil` — nunca uma coleção (não-objetivo 2).
+    Select { predicate: Box<Expr>, limit: Box<Expr> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

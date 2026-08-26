@@ -35,6 +35,10 @@ pub enum TokKind {
     In,
     Func,
     Invocar,
+    /// `selecionar` (RFC-015) — gramática fixa `selecionar(mochila, onde:
+    /// <expr>, limite: <expr>)`. `onde`/`limite`/`mochila` continuam
+    /// identificadores comuns, só `selecionar` é keyword de verdade.
+    Selecionar,
 
     Plus,
     Minus,
@@ -289,6 +293,7 @@ impl Lexer {
             "in" => TokKind::In,
             "func" => TokKind::Func,
             "invocar" => TokKind::Invocar,
+            "selecionar" => TokKind::Selecionar,
             "and" | "e" => TokKind::And,
             "or" | "ou" => TokKind::Or,
             "not" | "nao" => TokKind::Not,

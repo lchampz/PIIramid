@@ -272,7 +272,7 @@ impl DuelScene {
             }
         };
 
-        let result = vm::run_turn_with_loadout_and_class(
+        let result = vm::run_turn_with_bag(
             &program,
             &mut self.player_vars,
             monster.spec.cycle_budget,
@@ -286,6 +286,7 @@ impl DuelScene {
             special_ready,
             Some(&save.loadout),
             save.player_class,
+            Some(&save.bag),
         );
 
         match result {
@@ -826,7 +827,8 @@ fn event_line(ev: &TurnEvent) -> Option<usize> {
         | TurnEvent::Inspected { line }
         | TurnEvent::Healed { line, .. }
         | TurnEvent::Waited { line }
-        | TurnEvent::Truncated { line } => Some(line.saturating_sub(1)),
+        | TurnEvent::Truncated { line }
+        | TurnEvent::Selected { line, .. } => Some(line.saturating_sub(1)),
         TurnEvent::BonusStrike { .. } | TurnEvent::CounterAttack { .. } => None,
     }
 }
@@ -869,5 +871,16 @@ fn describe_event(ev: &TurnEvent) -> (String, Color) {
             (format!("orcamento estourou! {name}{suffix}: {damage} de dano"), theme::SANGUE)
         }
         TurnEvent::Truncated { .. } => ("-- execucao interrompida: ciclos esgotados --".to_string(), theme::SANGUE),
+        // RFC-015 regra 10: mostra `examined`, nao so o custo em ciclos --
+        // e o numero que ensina por que reordenar `and` dentro de `onde:`
+        // muda o custo real. Texto provisorio (designer decide o final).
+        TurnEvent::Selected { examined, found, .. } => {
+            let plural = if *examined == 1 { "item" } else { "itens" };
+            if *found {
+                (format!("selecionar() -> item encontrado ({examined} {plural} examinados)"), theme::OURO)
+            } else {
+                (format!("selecionar() -> nenhum item bateu o filtro ({examined} {plural} examinados)"), theme::POEIRA)
+            }
+        }
     }
 }

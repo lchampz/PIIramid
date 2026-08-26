@@ -14,7 +14,7 @@ use super::api::{self, LOOP_TICK_COST, BRANCH_COST};
 use super::ast::{BinOp, Expr, Stmt, StmtKind, UnaryOp};
 use super::error::ScriptError;
 use super::value::{Item, ItemKind, Target, Value};
-use crate::inventory::{Loadout, PlayerClass};
+use crate::inventory::{Bag, Loadout, PlayerClass};
 use crate::monsters::{Element, Posture, Weakness};
 
 const BASE_ATTACK_DAMAGE: i32 = 12;
@@ -30,6 +30,12 @@ pub enum TurnEvent {
     BonusStrike { damage: i32 },
     CounterAttack { damage: i32, blocked: bool, special: bool },
     Truncated { line: usize },
+    /// `selecionar()` (RFC-015, regra 10): `examined` é quantos itens da
+    /// mochila foram varridos até parar (achou ou esgotou a mochila) —
+    /// não só o total de ciclos. Sem esse número separado, o jogador não
+    /// vê a causa da diferença de custo entre duas ordens de filtro em
+    /// `onde:` e conclui que é arbitrário (risco registrado na RFC).
+    Selected { line: usize, examined: usize, found: bool },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +111,14 @@ pub struct Vm<'a> {
     /// `loadout: None` na RFC-002, é o que permite os 82 testes existentes
     /// continuarem passando sem escolher classe nenhuma.
     player_class: Option<PlayerClass>,
+
+    /// Mochila real do jogador (RFC-015, regra 6), mesmo padrão de posse
+    /// emprestada de `loadout` — a VM só lê, nunca escreve (`selecionar`
+    /// não muda o inventário, não-objetivo 4 da RFC). `None` reproduz
+    /// "mochila vazia": `selecionar()` sempre devolve `Value::Nil` a custo
+    /// zero, nunca erro (regra 9, mesmo espírito de "ausência nunca é
+    /// erro" da RFC-002).
+    bag: Option<&'a Bag>,
 }
 
 /// Percorre os `Stmt` de nível superior do programa e registra todo
@@ -218,11 +232,14 @@ pub fn run_turn_with_loadout(
 }
 
 /// Mesma execução de turno que `run_turn_with_loadout`, com uma
-/// `PlayerClass` real opcional (RFC-003 §1). É a única das três que a tela
-/// de duelo (`scenes/duel.rs`) deveria chamar depois desta RFC —
-/// `run_turn`/`run_turn_with_loadout` continuam existindo só pela
-/// compatibilidade dos testes (82 testes existentes, zero assinatura
-/// editada).
+/// `PlayerClass` real opcional (RFC-003 §1). Assinatura preservada byte a
+/// byte pela mesma razão das duas anteriores (RFC-015): encaminha para
+/// `run_turn_with_bag` com `bag: None`, que é exatamente o comportamento
+/// anterior a esta RFC — `selecionar()` sempre devolve `Value::Nil` a
+/// custo zero (regra 9). `#[allow(dead_code)]` pelo mesmo motivo das
+/// anteriores: fora dos testes, só `run_turn_with_bag` é chamada
+/// (`scenes/duel.rs`).
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn run_turn_with_loadout_and_class(
     program: &[Stmt],
@@ -238,6 +255,47 @@ pub fn run_turn_with_loadout_and_class(
     enemy_special_ready: bool,
     loadout: Option<&Loadout>,
     player_class: Option<PlayerClass>,
+) -> Result<TurnResult, ScriptError> {
+    run_turn_with_bag(
+        program,
+        vars,
+        cycle_budget,
+        player_life,
+        player_max_life,
+        enemy_life,
+        enemy_max_life,
+        enemy_posture,
+        enemy_weakness,
+        enemy_base_damage,
+        enemy_special_ready,
+        loadout,
+        player_class,
+        None,
+    )
+}
+
+/// Mesma execução de turno que `run_turn_with_loadout_and_class`, com uma
+/// `Bag` real opcional (RFC-015, regra 6) — é a que `selecionar()` varre.
+/// É a única das quatro que a tela de duelo (`scenes/duel.rs`) deveria
+/// chamar depois desta RFC — as anteriores continuam existindo só pela
+/// compatibilidade dos testes (102 testes existentes, zero assinatura
+/// editada).
+#[allow(clippy::too_many_arguments)]
+pub fn run_turn_with_bag(
+    program: &[Stmt],
+    vars: &mut HashMap<String, Value>,
+    cycle_budget: u32,
+    player_life: i32,
+    player_max_life: i32,
+    enemy_life: i32,
+    enemy_max_life: i32,
+    enemy_posture: Posture,
+    enemy_weakness: Weakness,
+    enemy_base_damage: i32,
+    enemy_special_ready: bool,
+    loadout: Option<&Loadout>,
+    player_class: Option<PlayerClass>,
+    bag: Option<&Bag>,
 ) -> Result<TurnResult, ScriptError> {
     // Coleta de funções do jogador (regra 4) uma única vez, antes de
     // qualquer passada. As duas passadas recebem um clone do mesmo mapa —
@@ -264,6 +322,7 @@ pub fn run_turn_with_loadout_and_class(
         true,
         loadout,
         player_class,
+        bag,
     );
     match probe.exec_program(program) {
         Ok(()) => {}
@@ -287,6 +346,7 @@ pub fn run_turn_with_loadout_and_class(
         false,
         loadout,
         player_class,
+        bag,
     );
     let truncated = match vm.exec_program(program) {
         Ok(()) => false,
@@ -341,6 +401,7 @@ impl<'a> Vm<'a> {
         dry_run: bool,
         loadout: Option<&'a Loadout>,
         player_class: Option<PlayerClass>,
+        bag: Option<&'a Bag>,
     ) -> Self {
         Vm {
             vars,
@@ -361,6 +422,7 @@ impl<'a> Vm<'a> {
             shielded: false,
             loadout,
             player_class,
+            bag,
         }
     }
 
@@ -512,7 +574,7 @@ impl<'a> Vm<'a> {
                             .as_str()
                             .ok_or_else(|| self.err(line, "indice precisa ser texto, ex.: magia[\"fogo\"]"))?
                             .to_string();
-                        Ok(Value::Item(Item { kind, name }))
+                        Ok(Value::Item(Item { kind, name, bonus_damage: 0 }))
                     }
                     other => Err(self.err(line, format!("nao e possivel indexar um {}", other.type_name()))),
                 }
@@ -524,7 +586,12 @@ impl<'a> Vm<'a> {
                     // acesso "por enum": magia.Fogo == magia["fogo"] — mesma
                     // coleção, só sem aspas; o nome vira minúsculo pra bater
                     // com o esquema de nomes usado em Element::from_name.
-                    Value::Collection(kind) => Ok(Value::Item(Item { kind, name: field.to_lowercase() })),
+                    Value::Collection(kind) => Ok(Value::Item(Item { kind, name: field.to_lowercase(), bonus_damage: 0 })),
+                    // RFC-015 regra 5: `item.nome`/`item.tipo`/`item.bonus` —
+                    // é o que `onde:` de `selecionar()` consulta. Não tem
+                    // relação com `resolve_attack` (não-objetivo 5): é só
+                    // leitura do valor, nunca um segundo caminho de bônus.
+                    Value::Item(item) => self.eval_item_field(&item, field, line),
                     other => Err(self.err(line, format!("nao e possivel acessar campo em um {}", other.type_name()))),
                 }
             }
@@ -540,7 +607,70 @@ impl<'a> Vm<'a> {
                 }
             }
             Expr::Binary(l, op, r) => self.eval_binary(l, *op, r, line),
+            Expr::Select { predicate, limit } => self.eval_select(predicate, limit, line),
         }
+    }
+
+    /// `selecionar(mochila, onde: <predicate>, limite: <limit>)` (RFC-015,
+    /// regras 3, 6-9). `limite` só aceita o literal `1` — qualquer outro
+    /// valor é erro claro nesta linha, nunca truncamento silencioso
+    /// (não-objetivo 2 da RFC). Sem `bag` ou mochila vazia: `Value::Nil` a
+    /// custo zero, sem passar pelo laço (regra 9). Cada item examinado
+    /// cobra `SELECT_SCAN_COST`, liga `vars["item"]` temporariamente
+    /// (salvando/restaurando o valor anterior, se houver) e avalia
+    /// `predicate` — o curto-circuito de `and`/`or` já existente em
+    /// `eval_binary` decide quantas cláusulas rodar *dentro* de cada item;
+    /// esta função decide só quantos *itens* são examinados até o
+    /// primeiro match (regra 8).
+    fn eval_select(&mut self, predicate: &Expr, limit: &Expr, line: usize) -> VResult<Value> {
+        let limit_v = self.eval(limit, line)?;
+        let limit_n = limit_v
+            .as_num()
+            .ok_or_else(|| self.err(line, format!("'limite' precisa ser numero, encontrei {}", limit_v.type_name())))?;
+        if limit_n != 1.0 {
+            return Err(self.err(line, format!("'selecionar' so aceita limite: 1 nesta versao da Piramide, encontrei limite: {limit_n}")));
+        }
+
+        // Extrai os dados da mochila antes do laço (não a referência) para
+        // não manter `self.bag` emprestado enquanto o resto do método
+        // precisa de `&mut self` para cobrar ciclo e avaliar o predicado.
+        let entries: Vec<(ItemKind, String, i32)> =
+            self.bag.map(|bag| bag.0.iter().map(|(item, _qty)| (item.kind, item.name.clone(), item.bonus_damage)).collect()).unwrap_or_default();
+
+        let previous_item = self.vars.get("item").cloned();
+        let mut examined = 0usize;
+        let mut found: Option<Item> = None;
+
+        for (kind, name, bonus_damage) in entries {
+            self.charge(line, api::SELECT_SCAN_COST)?;
+            examined += 1;
+
+            let candidate = Item { kind, name, bonus_damage };
+            self.vars.insert("item".to_string(), Value::Item(candidate.clone()));
+            let matched = self.eval(predicate, line)?.as_bool();
+            if matched {
+                found = Some(candidate);
+                break;
+            }
+        }
+
+        match previous_item {
+            Some(v) => {
+                self.vars.insert("item".to_string(), v);
+            }
+            None => {
+                self.vars.remove("item");
+            }
+        }
+
+        if !self.dry_run {
+            self.events.push(TurnEvent::Selected { line, examined, found: found.is_some() });
+        }
+
+        Ok(match found {
+            Some(item) => Value::Item(item),
+            None => Value::Nil,
+        })
     }
 
     fn eval_ident(&mut self, name: &str, line: usize) -> VResult<Value> {
@@ -570,6 +700,19 @@ impl<'a> Vm<'a> {
             "postura" if target == Target::Enemy => Ok(Value::Str(self.enemy_posture.as_str().to_string())),
             "ciclos" => Ok(Value::Num((self.cycle_budget.saturating_sub(self.cycles_used)) as f64)),
             other => Err(self.err(line, format!("campo desconhecido: '{other}'"))),
+        }
+    }
+
+    /// Campos de um `Value::Item` (RFC-015, regra 5): `.nome`, `.tipo`
+    /// (via `ItemKind::label()`) e `.bonus` (`bonus_damage`, RFC-015 regra
+    /// 4). É o que permite `onde:` de `selecionar()` consultar o item sob
+    /// exame sem depender de nenhum campo novo em `Vm`.
+    fn eval_item_field(&self, item: &Item, field: &str, line: usize) -> VResult<Value> {
+        match field {
+            "nome" => Ok(Value::Str(item.name.clone())),
+            "tipo" => Ok(Value::Str(item.kind.label().to_string())),
+            "bonus" => Ok(Value::Num(item.bonus_damage as f64)),
+            other => Err(self.err(line, format!("campo desconhecido em item: '{other}'"))),
         }
     }
 
@@ -863,6 +1006,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inventory::Item as InvItem;
     use crate::script::parser::parse;
 
     fn run(src: &str, budget: u32, weakness: Weakness, posture: Posture) -> TurnResult {
@@ -1876,5 +2020,243 @@ mod tests {
         // custo no orcamento principal: 2*INVOKE_COST + 1 atacar() = 4 + 2 = 6
         let r = run_turn(&program, &mut HashMap::new(), 8, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
         assert!(!r.truncated, "script de referencia com duas invocacoes nao pode estourar nem o menor orcamento do bestiario (Zumbi, 8)");
+    }
+
+    // --- RFC-015: selecionar() sobre a mochila ------------------------
+
+    /// Passo 2 da RFC-015, isolado do resto: `Value::Item` como base de
+    /// `eval_field` expõe `.nome`/`.tipo`/`.bonus` mesmo para um item
+    /// construído pela sintaxe normal (nao vindo de `selecionar()`) —
+    /// `.bonus` e 0 porque a regra 4 so preenche o valor real quando o
+    /// item vem da mochila.
+    #[test]
+    fn item_field_access_exposes_nome_tipo_bonus() {
+        let src = "x = espada.Ferro\nnome = x.nome\ntipo = x.tipo\nbonus = x.bonus\nesperar()\n";
+        let program = parse(src).unwrap();
+        let mut vars = HashMap::new();
+        run_turn(&program, &mut vars, 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
+        assert_eq!(vars.get("nome"), Some(&Value::Str("ferro".to_string())));
+        assert_eq!(vars.get("tipo"), Some(&Value::Str("espada".to_string())));
+        assert_eq!(vars.get("bonus"), Some(&Value::Num(0.0)));
+    }
+
+    /// Monta uma `Bag` de teste a partir de `(kind, nome, bonus_damage)` —
+    /// `id` reaproveita o nome (não importa pra `selecionar`, só identidade
+    /// de save) e quantidade fixa em 1 (também irrelevante: regra 7 varre
+    /// entradas, não unidades).
+    fn bag_of(entries: Vec<(ItemKind, &str, i32)>) -> Bag {
+        Bag(entries.into_iter().map(|(kind, name, bonus_damage)| (InvItem { id: name.to_string(), kind, name: name.to_string(), bonus_damage }, 1)).collect())
+    }
+
+    fn run_with_bag(src: &str, budget: u32, weakness: Weakness, posture: Posture, bag: &Bag) -> TurnResult {
+        let program = parse(src).unwrap();
+        let mut vars = HashMap::new();
+        run_turn_with_bag(&program, &mut vars, budget, 100, 100, 100, 100, posture, weakness, 10, false, None, None, Some(bag)).unwrap()
+    }
+
+    fn selected_event(r: &TurnResult) -> (usize, bool) {
+        match r.events.iter().find_map(|e| match e {
+            TurnEvent::Selected { examined, found, .. } => Some((*examined, *found)),
+            _ => None,
+        }) {
+            Some(v) => v,
+            None => panic!("nenhum TurnEvent::Selected encontrado: {:?}", r.events),
+        }
+    }
+
+    /// Critério de aceite central da RFC-015: reordenar as cláusulas de
+    /// `onde:` muda o custo real em ciclos, com o mesmo item encontrado no
+    /// fim. Uma composição só de comparações simples (`item.tipo == ...`)
+    /// não basta para provar isso: nenhuma delas custa ciclo pra avaliar
+    /// (só instruções custam ciclo, `script/api.rs`), e o "and" é
+    /// comutativo no valor booleano resultante — reordenar duas
+    /// comparações puras nunca muda qual item é o primeiro a bater os dois
+    /// filtros ao mesmo tempo, então o número de itens examinados pelo
+    /// `selecionar` externo é idêntico nas duas ordens (ver nota de
+    /// investigação: crítica de especificação sobre este ponto). A cláusula
+    /// "cara" de verdade precisa custar ciclo pra avaliar — aqui ela é um
+    /// `selecionar()` aninhado (varre a mochila de novo, cobrando
+    /// `SELECT_SCAN_COST` por item que examina), o análogo direto de uma
+    /// sub-consulta cara num `WHERE` de banco real. Com o filtro barato
+    /// (`item.tipo == "pocao"`, comparação pura) primeiro, o curto-circuito
+    /// de `and` (já existente em `eval_binary`) pula o `selecionar()`
+    /// aninhado para os 3 itens que já falham no filtro barato; com o caro
+    /// primeiro, o aninhado roda incondicionalmente pros 4 itens.
+    #[test]
+    fn onde_barato_antes_do_caro_custa_menos_ciclos_que_a_ordem_invertida_mesmo_resultado() {
+        let bag = bag_of(vec![
+            (ItemKind::Escudo, "a", 0),
+            (ItemKind::Escudo, "b", 0),
+            (ItemKind::Escudo, "c", 0),
+            (ItemKind::Pocao, "d", 9),
+        ]);
+
+        // `selecionar(...)` sozinho numa posição booleana já converte via
+        // `as_bool` (Item -> true, Nil -> false) — não precisa de um
+        // literal `nil` pra comparar (a linguagem não tem um).
+        let barato_primeiro = "item = selecionar(mochila, onde: item.tipo == \"pocao\" and selecionar(mochila, onde: item.bonus > 5, limite: 1), limite: 1)\n";
+        let caro_primeiro = "item = selecionar(mochila, onde: selecionar(mochila, onde: item.bonus > 5, limite: 1) and item.tipo == \"pocao\", limite: 1)\n";
+
+        let cheap_first = run_with_bag(barato_primeiro, 200, Weakness::Elemento(Element::Fogo), Posture::Guarda, &bag);
+        let expensive_first = run_with_bag(caro_primeiro, 200, Weakness::Elemento(Element::Fogo), Posture::Guarda, &bag);
+
+        assert!(
+            cheap_first.cycles_used < expensive_first.cycles_used,
+            "barato-primeiro ({} ciclos) deveria custar menos que caro-primeiro ({} ciclos)",
+            cheap_first.cycles_used,
+            expensive_first.cycles_used
+        );
+
+        // mesmo resultado nas duas ordens: acham o mesmo item ("d", a poção)
+        let (_, found_cheap) = selected_event(&cheap_first);
+        let (_, found_expensive) = selected_event(&expensive_first);
+        assert!(found_cheap && found_expensive, "as duas ordens precisam achar o mesmo item, so o custo deve diferir");
+    }
+
+    #[test]
+    fn item_found_on_first_scan_costs_one_cycle() {
+        let bag = bag_of(vec![(ItemKind::Pocao, "vida", 3), (ItemKind::Escudo, "bronze", 0), (ItemKind::Magia, "fogo", 8)]);
+        let src = "item = selecionar(mochila, onde: item.tipo == \"pocao\", limite: 1)\n";
+        let r = run_with_bag(src, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &bag);
+        assert_eq!(r.cycles_used, api::SELECT_SCAN_COST);
+        let (examined, found) = selected_event(&r);
+        assert_eq!(examined, 1);
+        assert!(found);
+    }
+
+    #[test]
+    fn item_not_found_after_scanning_whole_bag_costs_bag_length_cycles() {
+        let bag = bag_of(vec![(ItemKind::Pocao, "vida", 3), (ItemKind::Escudo, "bronze", 0), (ItemKind::Magia, "fogo", 8)]);
+        let src = "item = selecionar(mochila, onde: item.tipo == \"amuleto\", limite: 1)\n";
+        let r = run_with_bag(src, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &bag);
+        assert_eq!(r.cycles_used, api::SELECT_SCAN_COST * bag.0.len() as u32);
+        let (examined, found) = selected_event(&r);
+        assert_eq!(examined, bag.0.len());
+        assert!(!found);
+    }
+
+    #[test]
+    fn limite_different_from_one_is_a_clear_execution_error_on_the_line() {
+        let bag = bag_of(vec![(ItemKind::Pocao, "vida", 3)]);
+        let program = parse("item = selecionar(mochila, onde: item.tipo == \"pocao\", limite: 2)\n").unwrap();
+        let err = run_turn_with_bag(
+            &program,
+            &mut HashMap::new(),
+            20,
+            100,
+            100,
+            100,
+            100,
+            Posture::Guarda,
+            Weakness::Elemento(Element::Fogo),
+            10,
+            false,
+            None,
+            None,
+            Some(&bag),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("limite"));
+        assert_eq!(err.line, 1);
+    }
+
+    #[test]
+    fn selecionar_without_bag_or_with_empty_bag_returns_nil_at_zero_cost_never_error() {
+        let src = "item = selecionar(mochila, onde: item.tipo == \"pocao\", limite: 1)\nesperar()\n";
+        let program = parse(src).unwrap();
+
+        // bag: None (RFC-002/RFC-015: ausencia nunca e erro)
+        let mut vars_no_bag = HashMap::new();
+        let r = run_turn_with_bag(&program, &mut vars_no_bag, 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false, None, None, None)
+            .unwrap();
+        assert_eq!(r.cycles_used, 1, "sem mochila, selecionar nao pode custar ciclo - so o esperar() conta");
+        assert_eq!(vars_no_bag.get("item"), Some(&Value::Nil));
+        let (examined, found) = selected_event(&r);
+        assert_eq!(examined, 0);
+        assert!(!found);
+
+        // mochila vazia
+        let empty_bag = Bag::default();
+        let mut vars_empty = HashMap::new();
+        let r2 = run_turn_with_bag(
+            &program,
+            &mut vars_empty,
+            20,
+            100,
+            100,
+            100,
+            100,
+            Posture::Guarda,
+            Weakness::Elemento(Element::Fogo),
+            10,
+            false,
+            None,
+            None,
+            Some(&empty_bag),
+        )
+        .unwrap();
+        assert_eq!(r2.cycles_used, 1);
+        assert_eq!(vars_empty.get("item"), Some(&Value::Nil));
+    }
+
+    #[test]
+    fn selected_item_fields_are_accessible_inside_onde_and_after_assignment() {
+        let bag = bag_of(vec![(ItemKind::Magia, "fogo", 8)]);
+        let src = "item = selecionar(mochila, onde: item.nome == \"fogo\" and item.tipo == \"magia\" and item.bonus == 8, limite: 1)\nnome = item.nome\ntipo = item.tipo\nbonus = item.bonus\n";
+        let program = parse(src).unwrap();
+        let mut vars = HashMap::new();
+        run_turn_with_bag(&program, &mut vars, 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false, None, None, Some(&bag)).unwrap();
+        assert_eq!(vars.get("nome"), Some(&Value::Str("fogo".to_string())));
+        assert_eq!(vars.get("tipo"), Some(&Value::Str("magia".to_string())));
+        assert_eq!(vars.get("bonus"), Some(&Value::Num(8.0)));
+    }
+
+    /// Prova a regra 5 (não-objetivo 5 da RFC): o item devolvido por
+    /// `selecionar` tem `.bonus_damage` real da mochila (50, bem maior que
+    /// qualquer bônus de equipamento de teste), mas usá-lo em `atacar()`
+    /// resolve o bônus só pela correspondência com o `Loadout` **equipado**
+    /// — nunca pelo campo `.bonus` do item da mochila.
+    #[test]
+    fn item_from_selecionar_used_in_atacar_resolves_bonus_from_equipped_loadout_not_bag_field() {
+        let bag = bag_of(vec![(ItemKind::Magia, "fogo", 50)]);
+        let src = "item = selecionar(mochila, onde: item.tipo == \"magia\", limite: 1)\natacar(item)\n";
+        let program = parse(src).unwrap();
+
+        // sem loadout equipado: bonus tem que ser zero, nao 50.
+        let mut vars = HashMap::new();
+        let r = run_turn_with_bag(&program, &mut vars, 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false, None, None, Some(&bag))
+            .unwrap();
+        match r.events.iter().find(|e| matches!(e, TurnEvent::Attacked { .. })) {
+            Some(TurnEvent::Attacked { damage, effective, .. }) => {
+                assert!(*effective);
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE, "bonus do item da mochila (50) nao pode ser somado ao dano - so o loadout equipado conta");
+            }
+            other => panic!("evento inesperado: {other:?}"),
+        }
+
+        // com loadout equipado (bonus pequeno, 6): dano = base + 6, nunca + 50.
+        let loadout = Loadout { magia: Some(InvItem { id: "x".into(), kind: ItemKind::Magia, name: "fogo".into(), bonus_damage: 6 }), ..Default::default() };
+        let mut vars2 = HashMap::new();
+        let r2 = run_turn_with_bag(
+            &program,
+            &mut vars2,
+            20,
+            100,
+            100,
+            100,
+            100,
+            Posture::Guarda,
+            Weakness::Elemento(Element::Fogo),
+            10,
+            false,
+            Some(&loadout),
+            None,
+            Some(&bag),
+        )
+        .unwrap();
+        match r2.events.iter().find(|e| matches!(e, TurnEvent::Attacked { .. })) {
+            Some(TurnEvent::Attacked { damage, .. }) => assert_eq!(*damage, BASE_ATTACK_DAMAGE + 6),
+            other => panic!("evento inesperado: {other:?}"),
+        }
     }
 }

@@ -74,3 +74,12 @@ pub const INVOKE_BUDGET: u32 = 4;
 /// `MAX_CALL_DEPTH`. `2` bate com o exemplo exato da issue original
 /// (esqueleto + mago morto).
 pub const MAX_INVOCATIONS_PER_TURN: usize = 2;
+
+/// Custo em ciclos de examinar **um** item da mochila dentro de
+/// `selecionar()` (RFC-015, regra 7). Cobrado por item examinado, não por
+/// tamanho da mochila (regra 8) — é o que faz reordenar cláusulas `and`
+/// dentro de `onde:` mudar o custo real: o curto-circuito que
+/// `eval_binary` já implementa decide quantas cláusulas avaliar por item,
+/// mas o número de *itens* examinados até o primeiro match depende de onde
+/// na mochila ele está.
+pub const SELECT_SCAN_COST: u32 = 1;

@@ -9,6 +9,7 @@
 
 use macroquad::prelude::*;
 
+use crate::monsters::{Posture, Weakness};
 use crate::script::value::ItemKind;
 use crate::world::entity::Kind;
 
@@ -36,6 +37,14 @@ pub struct Assets {
     pub icon_magia: Texture2D,
     pub icon_escudo: Texture2D,
     pub icon_pocao: Texture2D,
+
+    // RFC-013: selos de postura e de fraqueza do dossiê (ver ASSETS-especificacoes.md).
+    pub icon_postura_guarda: Texture2D,
+    pub icon_postura_aberta: Texture2D,
+    pub icon_fraqueza_elemento: Texture2D,
+    pub icon_fraqueza_guarda: Texture2D,
+    pub icon_fraqueza_eficiencia: Texture2D,
+    pub icon_fraqueza_inspecao: Texture2D,
 
     pub tile_floor: Texture2D,
     pub tile_wall: Texture2D,
@@ -87,6 +96,13 @@ impl Assets {
             icon_escudo: load_pixel_texture("./assets/icons/escudo.png").await,
             icon_pocao: load_pixel_texture("./assets/icons/pocao.png").await,
 
+            icon_postura_guarda: load_pixel_texture("./assets/icons/postura_guarda.png").await,
+            icon_postura_aberta: load_pixel_texture("./assets/icons/postura_aberta.png").await,
+            icon_fraqueza_elemento: load_pixel_texture("./assets/icons/fraqueza_elemento.png").await,
+            icon_fraqueza_guarda: load_pixel_texture("./assets/icons/fraqueza_guarda.png").await,
+            icon_fraqueza_eficiencia: load_pixel_texture("./assets/icons/fraqueza_eficiencia.png").await,
+            icon_fraqueza_inspecao: load_pixel_texture("./assets/icons/fraqueza_inspecao.png").await,
+
             tile_floor: load_pixel_texture("./assets/tileset/chao1.png").await,
             tile_wall: load_pixel_texture("./assets/tileset/muro1.png").await,
 
@@ -114,6 +130,26 @@ impl Assets {
             ItemKind::Magia => &self.icon_magia,
             ItemKind::Escudo => &self.icon_escudo,
             ItemKind::Pocao => &self.icon_pocao,
+        }
+    }
+
+    pub fn icon_for_posture(&self, posture: Posture) -> &Texture2D {
+        match posture {
+            Posture::Guarda => &self.icon_postura_guarda,
+            Posture::Aberta => &self.icon_postura_aberta,
+        }
+    }
+
+    /// `None` para `DuploSelo`/`ExigeNomeacao`: a spec do designer não cobre
+    /// ícone para essas duas fraquezas (RFC-013, não-objetivo 1) — o
+    /// chamador desenha só o texto da tag, como já era antes desta RFC.
+    pub fn icon_for_weakness(&self, weakness: Weakness) -> Option<&Texture2D> {
+        match weakness {
+            Weakness::Elemento(_) => Some(&self.icon_fraqueza_elemento),
+            Weakness::ExigeGuarda => Some(&self.icon_fraqueza_guarda),
+            Weakness::Eficiencia { .. } => Some(&self.icon_fraqueza_eficiencia),
+            Weakness::RequerInspecao => Some(&self.icon_fraqueza_inspecao),
+            Weakness::DuploSelo | Weakness::ExigeNomeacao => None,
         }
     }
 

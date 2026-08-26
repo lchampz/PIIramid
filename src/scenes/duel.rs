@@ -513,12 +513,19 @@ impl DuelScene {
             DrawTextureParams { dest_size: Some(vec2(foe_size, foe_size)), ..Default::default() },
         );
         let tag = monster.spec.weakness.label();
+        let weakness_icon = assets.icon_for_weakness(monster.spec.weakness);
+        // RFC-013: selo ao lado da tag para as 4 fraquezas com ícone
+        // desenhado; DuploSelo/ExigeNomeacao seguem só com o texto.
+        let icon_gap = if weakness_icon.is_some() { 22.0 } else { 0.0 };
         let tag_dims = measure_text(tag, Some(&assets.font_body), 13, 1.0);
         // regra 4 + 6: AREIA_ESCURA em seu papel real (preenchimento de
         // superficie elevada) para a etiqueta de fraqueza, em vez de
         // SANGUE (que agora e exclusiva de dano/erro).
-        draw_rectangle(foe_x - 4.0, foe_y - 4.0, tag_dims.width + 12.0, 22.0, theme::AREIA_ESCURA);
-        draw_text_ex(tag, foe_x + 2.0, foe_y + 12.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::PAPIRO, ..Default::default() });
+        draw_rectangle(foe_x - 4.0, foe_y - 4.0, tag_dims.width + 12.0 + icon_gap, 22.0, theme::AREIA_ESCURA);
+        if let Some(icon) = weakness_icon {
+            draw_texture_ex(icon, foe_x + 2.0, foe_y - 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(18.0, 18.0)), ..Default::default() });
+        }
+        draw_text_ex(tag, foe_x + 2.0 + icon_gap, foe_y + 12.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::PAPIRO, ..Default::default() });
 
         if let Some(hit) = &self.hit {
             let progress = (hit.timer / 1.1).clamp(0.0, 1.0);
@@ -592,13 +599,24 @@ impl DuelScene {
 
         draw_text_ex(monster.spec.title.to_uppercase(), x + 12.0, y + 18.0, TextParams { font: Some(&assets.font_title), font_size: theme::TITLE_MD, color: theme::PAPIRO, ..Default::default() });
         y += 34.0;
+        let posture_label = format!("POSTURA: {}", monster.posture.as_str().to_uppercase());
         draw_text_ex(
-            format!("POSTURA: {}", monster.posture.as_str().to_uppercase()),
+            &posture_label,
             x + 12.0,
             y,
             // regra 3: postura e dado primario, nao destaque — sai de
             // OURO e passa a PAPIRO.
             TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::PAPIRO, ..Default::default() },
+        );
+        // RFC-013: selo de postura ao lado do texto — dado que a fraqueza
+        // do Escaravelho depende de ler corretamente turno a turno.
+        let posture_dims = measure_text(&posture_label, Some(&assets.font_body), theme::BODY_MD, 1.0);
+        draw_texture_ex(
+            assets.icon_for_posture(monster.posture),
+            x + 12.0 + posture_dims.width + 8.0,
+            y - 15.0,
+            WHITE,
+            DrawTextureParams { dest_size: Some(vec2(18.0, 18.0)), ..Default::default() },
         );
         y += 22.0;
         draw_text_ex(
@@ -618,12 +636,17 @@ impl DuelScene {
         y += 8.0;
 
         let tag = monster.spec.weakness.label();
+        let weakness_icon = assets.icon_for_weakness(monster.spec.weakness);
+        let icon_gap = if weakness_icon.is_some() { 22.0 } else { 0.0 };
         let tag_dims = measure_text(tag, Some(&assets.font_body), 13, 1.0);
         // regra 6: tag de fraqueza e identidade do inimigo, nao dano/erro
         // — moldura neutra (TIJOLO/AREIA_ESCURA) em vez de SANGUE/DANGER_BG.
-        draw_rectangle(x + 12.0, y, tag_dims.width + 16.0, 24.0, theme::AREIA_ESCURA);
-        draw_rectangle_lines(x + 12.0, y, tag_dims.width + 16.0, 24.0, 2.0, theme::TIJOLO);
-        draw_text_ex(tag, x + 20.0, y + 17.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::PAPIRO, ..Default::default() });
+        draw_rectangle(x + 12.0, y, tag_dims.width + 16.0 + icon_gap, 24.0, theme::AREIA_ESCURA);
+        draw_rectangle_lines(x + 12.0, y, tag_dims.width + 16.0 + icon_gap, 24.0, 2.0, theme::TIJOLO);
+        if let Some(icon) = weakness_icon {
+            draw_texture_ex(icon, x + 16.0, y + 3.0, WHITE, DrawTextureParams { dest_size: Some(vec2(18.0, 18.0)), ..Default::default() });
+        }
+        draw_text_ex(tag, x + 20.0 + icon_gap, y + 17.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::PAPIRO, ..Default::default() });
         y += 34.0;
 
         self.draw_item_icons(assets, x + 12.0, y);
@@ -698,13 +721,16 @@ fn estimate_cost(lines: &[String]) -> u32 {
             if line.trim_start().starts_with("if ") || line.trim_start().starts_with("while ") || line.trim_start().starts_with("for ") {
                 return 1;
             }
+            if line.trim_start().starts_with("invocar ") {
+                return api::INVOKE_COST;
+            }
             0
         })
         .sum()
 }
 
 const KEYWORDS: &[&str] =
-    &["if", "else", "while", "for", "func", "in", "and", "or", "not", "e", "ou", "nao", "true", "false"];
+    &["if", "else", "while", "for", "func", "invocar", "in", "and", "or", "not", "e", "ou", "nao", "true", "false"];
 const NATIVE_FUNCS: &[&str] = &["atacar", "defender", "inspecionar", "curar", "esperar"];
 const COLLECTIONS: &[&str] = &["espada", "magia", "escudo", "pocao", "eu", "inimigo"];
 

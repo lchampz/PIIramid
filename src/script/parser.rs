@@ -36,6 +36,7 @@ fn describe_token(kind: &TokKind) -> String {
         TokKind::For => "'for'".to_string(),
         TokKind::In => "'in'".to_string(),
         TokKind::Func => "'func'".to_string(),
+        TokKind::Invocar => "'invocar'".to_string(),
         TokKind::Plus => "'+'".to_string(),
         TokKind::Minus => "'-'".to_string(),
         TokKind::Star => "'*'".to_string(),
@@ -238,6 +239,7 @@ impl Parser {
             TokKind::While => self.parse_while()?,
             TokKind::For => self.parse_for()?,
             TokKind::Func => self.parse_func()?,
+            TokKind::Invocar => self.parse_invoke()?,
             TokKind::Ident(name) if *self.peek_at(1) == TokKind::Assign => {
                 self.advance();
                 self.advance(); // '='
@@ -316,6 +318,20 @@ impl Parser {
         }
         let body = self.block()?;
         Ok(StmtKind::FuncDef { name, body })
+    }
+
+    /// `invocar` NOME bloco (RFC-004, regra 1). Diferente de `parse_func`,
+    /// não há checagem de `block_depth`: `invocar` é permitido em qualquer
+    /// posição de instrução, inclusive dentro de `if`/`while`/`for`/`func`
+    /// (regra 2) — é ação imediata, não declaração. Reaproveita o mesmo
+    /// `block()` de `parse_func`, o que basta para barrar `func` dentro de
+    /// `invocar` de graça (regra 7): `block()` já incrementa
+    /// `block_depth`, e é exatamente essa checagem que `parse_func` faz.
+    fn parse_invoke(&mut self) -> Result<StmtKind, ScriptError> {
+        self.advance(); // 'invocar'
+        let name = self.expect_ident()?;
+        let body = self.block()?;
+        Ok(StmtKind::Invoke { name, body })
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ScriptError> {
@@ -507,6 +523,7 @@ mod tests {
                 StmtKind::While { body, .. } => zero_lines(body),
                 StmtKind::For { body, .. } => zero_lines(body),
                 StmtKind::FuncDef { body, .. } => zero_lines(body),
+                StmtKind::Invoke { body, .. } => zero_lines(body),
                 StmtKind::Expr(_) | StmtKind::Assign(_, _) => {}
             }
         }

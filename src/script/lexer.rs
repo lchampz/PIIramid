@@ -34,6 +34,7 @@ pub enum TokKind {
     For,
     In,
     Func,
+    Invocar,
 
     Plus,
     Minus,
@@ -287,6 +288,7 @@ impl Lexer {
             "for" => TokKind::For,
             "in" => TokKind::In,
             "func" => TokKind::Func,
+            "invocar" => TokKind::Invocar,
             "and" | "e" => TokKind::And,
             "or" | "ou" => TokKind::Or,
             "not" | "nao" => TokKind::Not,

@@ -76,6 +76,11 @@ pub struct Vm<'a> {
     /// disso, já que nenhum monstro tem orçamento >= `MAX_CALL_DEPTH`.
     depth: usize,
 
+    /// Quantas invocações (`StmtKind::Invoke`, RFC-004) já rodaram neste
+    /// turno. Verificado contra `api::MAX_INVOCATIONS_PER_TURN` antes de
+    /// cada nova invocação — mesmo padrão de `depth`/`MAX_CALL_DEPTH`.
+    invocations_this_turn: usize,
+
     player_life: i32,
     player_max_life: i32,
 
@@ -345,6 +350,7 @@ impl<'a> Vm<'a> {
             events: Vec::new(),
             funcs,
             depth: 0,
+            invocations_this_turn: 0,
             player_life,
             player_max_life,
             enemy_life,
@@ -438,6 +444,56 @@ impl<'a> Vm<'a> {
             // aconteceu em `collect_funcs`, antes do programa começar a
             // rodar — este statement não faz mais nada.
             StmtKind::FuncDef { .. } => Ok(()),
+            // `invocar nome:` (RFC-004) — os 5 passos da decisão de
+            // arquitetura, na ordem exata da RFC. `name` é só rótulo
+            // narrativo/de log (regra 1); não afeta a execução.
+            StmtKind::Invoke { name: _, body } => self.exec_invoke(line, body),
+        }
+    }
+
+    /// Passos 1-5 da "Decisão de arquitetura" da RFC-004. Nenhuma
+    /// suspensão: `exec_block` roda até o fim exatamente como já fazia,
+    /// só que com `(cycle_budget, cycles_used)` trocados temporariamente
+    /// por um sub-orçamento fixo — o mesmo padrão de "salvar/trocar/
+    /// restaurar" que `eval_user_call` já usa para `self.depth`.
+    fn exec_invoke(&mut self, line: usize, body: &[Stmt]) -> VResult<()> {
+        // 1. Cobra INVOKE_COST do orçamento principal. Estourar aqui é
+        // estourar o orçamento principal — `charge` já devolve
+        // `Signal::Truncated`, que propaga normal (contra-ataque incluso).
+        self.charge(line, api::INVOKE_COST)?;
+
+        // 2. Limite de invocações por turno, mesmo padrão de MAX_CALL_DEPTH.
+        if self.invocations_this_turn >= api::MAX_INVOCATIONS_PER_TURN {
+            return Err(self.err(
+                line,
+                format!(
+                    "limite de invocacoes por turno excedido (maximo {})",
+                    api::MAX_INVOCATIONS_PER_TURN
+                ),
+            ));
+        }
+        self.invocations_this_turn += 1;
+
+        // 3. Salva/troca o contador de ciclos por um sub-orcamento isolado.
+        let outer_budget = self.cycle_budget;
+        let outer_used = self.cycles_used;
+        self.cycle_budget = api::INVOKE_BUDGET;
+        self.cycles_used = 0;
+
+        let result = self.exec_block(body);
+
+        // 5. Restaura o contador principal - ciclos gastos dentro da
+        // invocacao nunca contam contra o orcamento principal nem sobram
+        // para o bonus do turno (nao-objetivo 5 da RFC).
+        self.cycle_budget = outer_budget;
+        self.cycles_used = outer_used;
+
+        // 4. Truncamento interno nao propaga (nao e o turno que estourou);
+        // erro real propaga normalmente.
+        match result {
+            Ok(()) => Ok(()),
+            Err(Signal::Truncated { .. }) => Ok(()),
+            Err(Signal::Error(e)) => Err(Signal::Error(e)),
         }
     }
 
@@ -650,10 +706,11 @@ impl<'a> Vm<'a> {
                 Ok(Value::Nil)
             }
             "curar" => {
-                let _item = self.expect_item(&values, name, line)?;
+                let item = self.expect_item(&values, name, line)?;
                 if !self.dry_run {
-                    self.player_life = (self.player_life + HEAL_AMOUNT).min(self.player_max_life);
-                    self.events.push(TurnEvent::Healed { line, amount: HEAL_AMOUNT });
+                    let amount = HEAL_AMOUNT + self.item_bonus(&item);
+                    self.player_life = (self.player_life + amount).min(self.player_max_life);
+                    self.events.push(TurnEvent::Healed { line, amount });
                 }
                 Ok(Value::Nil)
             }
@@ -712,9 +769,17 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// Soma de `equipped_bonus` + `class_bonus` (RFC-014): ponto único de
+    /// correspondência de slot/kind/afinidade, reaproveitado por
+    /// `resolve_attack` e por `curar()` — evita duas fontes de verdade
+    /// para a mesma regra aditiva.
+    fn item_bonus(&self, item: &Item) -> i32 {
+        self.equipped_bonus(item) + self.class_bonus(item)
+    }
+
     fn resolve_attack(&self, item: &Item) -> (i32, bool) {
         let (base, effective) = self.resolve_attack_by_weakness(item);
-        (base + self.equipped_bonus(item) + self.class_bonus(item), effective)
+        (base + self.item_bonus(item), effective)
     }
 
     fn resolve_attack_by_weakness(&self, item: &Item) -> (i32, bool) {
@@ -1614,5 +1679,202 @@ mod tests {
         assert_eq!(life, 0);
 
         assert!(correct_turns < naive_turns, "bonus de classe aditivo nao pode reabrir o antijogo de spam ingenuo travado pela RFC-012");
+    }
+
+    // RFC-014 — bonus de item/classe tambem em curar(): reaproveita
+    // item_bonus (equipped_bonus + class_bonus) ja usado por resolve_attack.
+
+    fn loadout_with_potion(name: &str, bonus_damage: i32) -> Loadout {
+        Loadout {
+            arma: None,
+            magia: None,
+            escudo: None,
+            pocao: Some(crate::inventory::Item { id: "teste".into(), kind: ItemKind::Pocao, name: name.into(), bonus_damage }),
+        }
+    }
+
+    // player_life = 50, player_max_life = 100: bem longe do teto, sem
+    // risco de o `.min()` mascarar diferenca de bonus entre os casos.
+    // budget == custo exato de curar() (4 ciclos): sem golpe bonus de fim
+    // de turno a misturar na cura medida.
+    fn run_curar(budget: u32, loadout: Option<&Loadout>, player_class: Option<PlayerClass>) -> TurnResult {
+        let program = parse("curar(pocao.Vida)\n").unwrap();
+        let mut vars = HashMap::new();
+        run_turn_with_loadout_and_class(
+            &program,
+            &mut vars,
+            budget,
+            50,
+            100,
+            100,
+            100,
+            Posture::Guarda,
+            Weakness::ExigeGuarda,
+            10,
+            false,
+            loadout,
+            player_class,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn equipped_potion_bonus_damage_heals_more() {
+        let sem_pocao = run_curar(4, None, None);
+        let com_pocao = run_curar(4, Some(&loadout_with_potion("vida", 6)), None);
+
+        assert_eq!(sem_pocao.player_life, 50 + HEAL_AMOUNT, "sem pocao equipada, cura deve ser exatamente HEAL_AMOUNT");
+        assert_eq!(com_pocao.player_life, 50 + HEAL_AMOUNT + 6, "pocao equipada com bonus_damage deve curar mais");
+        assert!(com_pocao.player_life > sem_pocao.player_life, "pocao com bonus_damage maior precisa curar mais que sem pocao equipada");
+    }
+
+    #[test]
+    fn ladrao_using_curar_gets_class_bonus_guerreiro_does_not() {
+        let sem_classe = run_curar(4, None, None);
+        let ladrao = run_curar(4, None, Some(PlayerClass::Ladrao));
+        let guerreiro = run_curar(4, None, Some(PlayerClass::Guerreiro));
+
+        assert_eq!(ladrao.player_life, sem_classe.player_life + api::CLASS_BONUS_DAMAGE, "Ladrao usando curar() com pocao deve receber CLASS_BONUS_DAMAGE");
+        assert_eq!(guerreiro.player_life, sem_classe.player_life, "afinidade do Guerreiro e Espada, nao Pocao -- curar() nao deve conceder bonus");
+    }
+
+    #[test]
+    fn curar_without_item_or_class_heals_exactly_heal_amount() {
+        // sem loadout e sem classe: mesmo comportamento de antes da RFC-014.
+        let r = run_curar(4, None, None);
+        assert_eq!(r.player_life, 50 + HEAL_AMOUNT, "sem item/classe, curar() deve curar exatamente HEAL_AMOUNT, igual ao comportamento pre-RFC-014");
+    }
+
+    // --- RFC-004: invocar (threads de invocacao do necromante) --------
+
+    #[test]
+    fn invoke_single_attack_deals_real_damage() {
+        let src = "invocar esqueleto:\n    atacar(espada.Ferro)\n";
+        let r = run(src, 4, Weakness::ExigeGuarda, Posture::Guarda);
+        assert!(r.enemy_life < 100, "atacar() dentro de invocar precisa causar dano real ao inimigo");
+        assert!(matches!(r.events[0], TurnEvent::Attacked { .. }));
+    }
+
+    /// O teste mais importante desta RFC (ver Nota de investigacao): prova
+    /// que execucao sequencial com troca de contador de ciclos, sem
+    /// suspensao/reescrita de `exec_block`/`exec_stmt`, basta para "duas
+    /// threads atacando no mesmo turno, dano somado" -- a decisao de
+    /// arquitetura da RFC-004 funciona sem precisar de mudanca estrutural
+    /// maior na VM.
+    #[test]
+    fn two_invocations_in_same_turn_sum_damage_to_enemy() {
+        let src = "invocar esqueleto:\n    atacar(espada.Ferro)\ninvocar mago_morto:\n    atacar(magia.Fogo)\n";
+        // orcamento principal == exatamente 2*INVOKE_COST: paga as duas
+        // invocacoes e nada mais, sem sobra pra golpe bonus interferir na
+        // medicao do dano.
+        let budget = 2 * api::INVOKE_COST;
+        let r = run(src, budget, Weakness::ExigeGuarda, Posture::Guarda);
+
+        assert!(!r.truncated, "duas invocacoes dentro do orcamento principal nao podem truncar o turno");
+        assert!(
+            !r.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { .. })),
+            "sem truncamento do turno principal nao pode haver contra-ataque: {:?}",
+            r.events
+        );
+        // ExigeGuarda com postura em Guarda: os dois ataques sao efetivos,
+        // dano cheio cada -- a soma prova que o dano das duas invocacoes
+        // realmente se acumula no mesmo `enemy_life`.
+        assert_eq!(r.enemy_life, 100 - 2 * BASE_ATTACK_DAMAGE);
+        let attacks = r.events.iter().filter(|e| matches!(e, TurnEvent::Attacked { .. })).count();
+        assert_eq!(attacks, 2, "as duas invocacoes precisam ter executado seu atacar(): {:?}", r.events);
+    }
+
+    #[test]
+    fn invoke_budget_overflow_does_not_truncate_turn_or_counterattack() {
+        // corpo com 3 atacar() (6 ciclos) estoura INVOKE_BUDGET (4) na
+        // terceira chamada -- a invocacao trunca internamente, mas o
+        // script principal continua depois do `invocar` e chega ao
+        // `esperar()` final.
+        let src = "invocar zumbi:\n    atacar(espada.Ferro)\n    atacar(espada.Ferro)\n    atacar(espada.Ferro)\nesperar()\n";
+        let budget = api::INVOKE_COST + 1; // so precisa cobrir invocar + esperar()
+        let r = run(src, budget, Weakness::ExigeGuarda, Posture::Guarda);
+
+        assert!(!r.truncated, "estouro de orcamento dentro de invocar nao pode truncar o turno principal");
+        assert!(
+            !r.events.iter().any(|e| matches!(e, TurnEvent::Truncated { .. })),
+            "truncamento de invocacao nao pode gerar TurnEvent::Truncated do turno: {:?}",
+            r.events
+        );
+        assert!(
+            !r.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { .. })),
+            "truncamento de invocacao nao pode disparar contra-ataque: {:?}",
+            r.events
+        );
+        assert!(
+            r.events.iter().any(|e| matches!(e, TurnEvent::Waited { .. })),
+            "o script principal precisa continuar depois do invocar truncado e chegar no esperar(): {:?}",
+            r.events
+        );
+        // so 2 dos 3 atacar() do corpo couberam no INVOKE_BUDGET antes de
+        // truncar -- a terceira chamada nunca chega a acontecer.
+        let attacks = r.events.iter().filter(|e| matches!(e, TurnEvent::Attacked { .. })).count();
+        assert_eq!(attacks, 2, "so 2 atacar() cabem em INVOKE_BUDGET antes do estouro interno: {:?}", r.events);
+    }
+
+    #[test]
+    fn third_invocation_in_same_turn_is_a_clear_error_on_the_right_line() {
+        let src = "invocar a:\n    esperar()\ninvocar b:\n    esperar()\ninvocar c:\n    esperar()\n";
+        let program = parse(src).unwrap();
+        let err = run_turn(&program, &mut HashMap::new(), 100, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false)
+            .unwrap_err();
+        assert_eq!(err.line, 5, "a terceira invocacao (linha do 'invocar c:') e a que excede o limite");
+        assert!(err.message.contains("invoca"), "mensagem de erro precisa falar de invocacao: {}", err.message);
+    }
+
+    #[test]
+    fn real_error_inside_invoke_propagates_and_invalidates_turn() {
+        // funcao desconhecida dentro do corpo de invocar e um erro real
+        // (Signal::Error), nao um truncamento de orcamento -- precisa
+        // propagar e invalidar o turno, igual a um erro em qualquer outro
+        // lugar do script (`runtime_error_does_not_consume_turn`).
+        let program = parse("invocar esqueleto:\n    fantasma()\n").unwrap();
+        let err = run_turn(&program, &mut HashMap::new(), 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false);
+        assert!(err.is_err(), "erro real dentro de invocar precisa invalidar o turno");
+    }
+
+    #[test]
+    fn func_inside_invoke_is_rejected_same_as_other_blocks() {
+        // regra 7: `invocar` reaproveita `block()`, que ja incrementa
+        // `block_depth` -- `func` dentro de `invocar` cai na mesma checagem
+        // que ja rejeita `func` dentro de if/while/for, de graca.
+        let src = "invocar esqueleto:\n    func f():\n        esperar()\n    f()\n";
+        let err = parse(src).unwrap_err();
+        assert!(err.message.contains("func"), "mensagem precisa apontar 'func' como o problema: {}", err.message);
+    }
+
+    #[test]
+    fn attack_inside_invoke_without_inner_func_against_apagado_deals_reduced_damage() {
+        // regra 8: dentro de um `invocar` sem `func` interno, `self.depth`
+        // continua 0 -- `eval_user_call` nunca roda para uma invocacao,
+        // so para chamada de funcao do jogador. Contra ExigeNomeacao
+        // (Apagado) isso significa dano reduzido, mesma consequencia de
+        // chamar atacar() direto no nivel superior sem nomear uma func.
+        let src = "invocar esqueleto:\n    atacar(espada.Ferro)\n";
+        let r = run(src, 4, Weakness::ExigeNomeacao, Posture::Guarda);
+        match &r.events[0] {
+            TurnEvent::Attacked { effective, damage, .. } => {
+                assert!(!*effective, "atacar() dentro de invocar sem func interno nao pode ser efetivo contra Apagado");
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 4);
+            }
+            other => panic!("evento inesperado: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reference_invoke_script_fits_every_current_monster_budget() {
+        // Jogabilidade (criterio de aceite): as duas invocacoes do exemplo
+        // da RFC, combinadas com um script principal razoavel, nao podem
+        // estourar o orcamento principal de nenhum monstro do bestiario
+        // atual (menor orcamento: Zumbi, 8 ciclos - src/monsters/data.rs).
+        let src = "invocar esqueleto:\n    atacar(espada.Ferro)\ninvocar mago_morto:\n    atacar(magia.Fogo)\natacar(espada.Ferro)\n";
+        let program = parse(src).unwrap();
+        // custo no orcamento principal: 2*INVOKE_COST + 1 atacar() = 4 + 2 = 6
+        let r = run_turn(&program, &mut HashMap::new(), 8, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
+        assert!(!r.truncated, "script de referencia com duas invocacoes nao pode estourar nem o menor orcamento do bestiario (Zumbi, 8)");
     }
 }

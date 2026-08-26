@@ -52,3 +52,25 @@ pub const MAX_CALL_DEPTH: usize = 32;
 /// (`BASE_ATTACK_DAMAGE` 12 contra `BASE_ATTACK_DAMAGE / 3` = 4, `/ 4` =
 /// 3), então a classe nunca disfarça a decisão de fraqueza errada.
 pub const CLASS_BONUS_DAMAGE: i32 = 4;
+
+/// Custo em ciclos, cobrado do orçamento **principal** do turno, de
+/// encontrar um `invocar nome:` (RFC-004, regra 3) — antes mesmo de rodar
+/// o corpo. Estourar o orçamento principal aqui se comporta exatamente
+/// como estourar em qualquer outra instrução: `Signal::Truncated` normal,
+/// contra-ataque incluído. Não é o custo do corpo da invocação — esse é
+/// pago do pool separado `INVOKE_BUDGET`.
+pub const INVOKE_COST: u32 = 2;
+
+/// Sub-orçamento de ciclos próprio e fixo para o corpo de um `invocar`
+/// (RFC-004, regra 4). Calibrado para caber exatamente um `atacar()` (2
+/// ciclos) com folga, ou dois com zero folga — pequeno de propósito: é
+/// reforço, não substituto do script principal. Ciclo sobrando aqui nunca
+/// gera `BonusStrike` nem volta ao orçamento principal (não-objetivo 5 da
+/// RFC) — é gasto ou perdido, nunca acumulado.
+pub const INVOKE_BUDGET: u32 = 4;
+
+/// Limite de invocações por turno (RFC-004, regra 5), verificado em
+/// runtime pelo campo `Vm::invocations_this_turn` — mesmo padrão de
+/// `MAX_CALL_DEPTH`. `2` bate com o exemplo exato da issue original
+/// (esqueleto + mago morto).
+pub const MAX_INVOCATIONS_PER_TURN: usize = 2;

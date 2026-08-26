@@ -61,4 +61,9 @@ pub enum StmtKind {
     /// (RFC-006). Declarar não executa nada; só a invocação (`Expr::Call`
     /// pelo mesmo `nome`) roda o corpo e cobra ciclo.
     FuncDef { name: String, body: Vec<Stmt> },
+    /// `invocar nome:` / `invocar nome {` — bloco executado imediatamente
+    /// com um sub-orçamento de ciclos próprio (RFC-004). Diferente de
+    /// `FuncDef`, não é uma declaração: `name` é só rótulo narrativo/de
+    /// log, nunca vira algo chamável nem acessível como variável.
+    Invoke { name: String, body: Vec<Stmt> },
 }

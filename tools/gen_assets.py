@@ -469,6 +469,57 @@ def gen_icon_pocao():
     save(up(img, 4), "icons", "pocao.png")
 
 
+# RFC-013 -- selo partido, compartilhado entre postura_aberta e
+# fraqueza_guarda: mesma geometria de "escudo quebrado" usada nas duas
+# familias, para nao duplicar o desenho (ver ASSETS-especificacoes.md).
+def draw_selo_partido(d):
+    d.polygon([(0, 1), (4, 1), (4, 4), (2, 6), (0, 4)], fill=P["stone"])
+    d.polygon([(4, 2), (7, 2), (7, 5), (4, 7), (4, 4)], fill=P["stone_dark"])
+    d.line([(4, 1), (4, 7)], fill=P["blood"], width=1)
+    d.point([(6, 6)], fill=P["stone_dark"])
+
+
+def gen_icon_postura():
+    def guarda(d):
+        d.polygon([(1, 1), (6, 1), (6, 4), (3, 7), (1, 4)], fill=P["stone"])
+        d.rectangle([1, 1, 6, 2], fill=P["gold"])
+        d.point([(3, 3), (3, 4)], fill=P["gold_dark"])
+        d.line([(1, 1), (6, 1)], fill=P["linen"])
+
+    for name, fn in (("guarda", guarda), ("aberta", draw_selo_partido)):
+        img = canvas(8, 8)
+        fn(ImageDraw.Draw(img))
+        save(up(img, 4), "icons", f"postura_{name}.png")
+
+
+def gen_icon_fraqueza():
+    def elemento(d):
+        d.polygon([(2, 7), (6, 7), (4, 1)], fill=P["gold"])
+        d.polygon([(3, 6), (5, 6), (4, 3)], fill=P["sun_core"])
+        d.point([(3, 7), (5, 7)], fill=P["stone_dark"])
+
+    def eficiencia(d):
+        d.polygon([(1, 1), (6, 1), (4, 4), (6, 7), (1, 7), (3, 4)], outline=P["stone_dark"])
+        d.polygon([(2, 6), (5, 6), (4, 5), (3, 5)], fill=P["sand_light"])
+        d.point([(4, 4)], fill=P["sand_light"])
+
+    def inspecao(d):
+        d.line([(1, 4), (4, 2), (7, 4)], fill=P["ink"], width=1)
+        d.line([(2, 5), (6, 5)], fill=P["ink"], width=1)
+        d.point([(4, 3)], fill=P["linen"])
+
+    variants = {
+        "elemento": elemento,
+        "guarda": draw_selo_partido,
+        "eficiencia": eficiencia,
+        "inspecao": inspecao,
+    }
+    for name, fn in variants.items():
+        img = canvas(8, 8)
+        fn(ImageDraw.Draw(img))
+        save(up(img, 4), "icons", f"fraqueza_{name}.png")
+
+
 # ------------------------------------------------------------------- ui --
 # Nao ha mais gen_button(): os botoes agora sao desenhados em Rust
 # (ui/button.rs) com retangulo+borda, sem depender de textura, para bater
@@ -513,6 +564,8 @@ def main():
     gen_icon_magia()
     gen_icon_escudo()
     gen_icon_pocao()
+    gen_icon_postura()
+    gen_icon_fraqueza()
     gen_logo()
 
 

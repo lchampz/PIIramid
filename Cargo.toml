@@ -1,0 +1,11 @@
+[package]
+name = "piiramid"
+version = "0.1.0"
+edition = "2021"
+description = "Um jogo onde voce derrota monstros escrevendo o algoritmo certo, nao a conta certa."
+
+[dependencies]
+macroquad = "0.4"
+
+[profile.release]
+opt-level = 3

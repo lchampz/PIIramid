@@ -96,7 +96,14 @@ pub struct Vm<'a> {
     enemy_weakness: Weakness,
     enemy_inspected: bool,
 
-    shielded: bool,
+    /// Item usado na última chamada de `defender()` no turno (RFC-016).
+    /// `Some` decide o bloqueio binário do contra-ataque (mesmo limiar de
+    /// antes, `is_some()` no lugar do `bool`); o item guardado também
+    /// alimenta `item_bonus` na hora de reduzir o dano bloqueado. Chamar
+    /// `defender()` de novo no mesmo turno sobrescreve — não acumula
+    /// (não-objetivo 3 da RFC-016, mesma semântica de "vira `true`" de
+    /// antes).
+    shielded: Option<Item>,
 
     /// Equipamento real do jogador (RFC-002, regra 5). `None` reproduz
     /// 100% do comportamento pré-RFC-002 (dano base, sem bônus) — é o que
@@ -358,9 +365,19 @@ pub fn run_turn_with_bag(
     };
 
     if truncated {
-        let blocked = vm.shielded;
+        let blocked = vm.shielded.is_some();
         let base = if enemy_special_ready { enemy_base_damage * 5 / 2 } else { enemy_base_damage };
         let dmg = if blocked { base / 2 } else { base };
+        // RFC-016: reduz o dano bloqueado pelo bônus do item usado em
+        // `defender()` (item/classe, mesma fonte de `resolve_attack` e
+        // `curar`) — piso em 0, nunca vira cura. Sem bloqueio, ou sem
+        // bônus, o comportamento é idêntico ao pré-RFC-016.
+        let dmg = if blocked {
+            let bonus = vm.item_bonus(vm.shielded.as_ref().expect("blocked implica shielded == Some"));
+            (dmg - bonus).max(0)
+        } else {
+            dmg
+        };
         vm.player_life = (vm.player_life - dmg).max(0);
         vm.events.push(TurnEvent::CounterAttack { damage: dmg, blocked, special: enemy_special_ready });
     } else {
@@ -419,7 +436,7 @@ impl<'a> Vm<'a> {
             enemy_posture,
             enemy_weakness,
             enemy_inspected: false,
-            shielded: false,
+            shielded: None,
             loadout,
             player_class,
             bag,
@@ -835,7 +852,7 @@ impl<'a> Vm<'a> {
             "defender" => {
                 let item = self.expect_item(&values, name, line)?;
                 if !self.dry_run {
-                    self.shielded = true;
+                    self.shielded = Some(item.clone());
                     self.events.push(TurnEvent::Defended { line, item });
                 }
                 Ok(Value::Nil)
@@ -1887,6 +1904,75 @@ mod tests {
         // sem loadout e sem classe: mesmo comportamento de antes da RFC-014.
         let r = run_curar(4, None, None);
         assert_eq!(r.player_life, 50 + HEAL_AMOUNT, "sem item/classe, curar() deve curar exatamente HEAL_AMOUNT, igual ao comportamento pre-RFC-014");
+    }
+
+    // RFC-016 — bonus de item/classe tambem em defender(): o item usado no
+    // ultimo defender() do turno reduz o contra-ataque bloqueado, alem do
+    // corte de 50% ja existente. Mesma fonte (`item_bonus`) que
+    // `resolve_attack` e `curar()` ja usam.
+
+    fn loadout_with_shield(name: &str, bonus_damage: i32) -> Loadout {
+        Loadout {
+            arma: None,
+            magia: None,
+            escudo: Some(crate::inventory::Item { id: "teste".into(), kind: ItemKind::Escudo, name: name.into(), bonus_damage }),
+            pocao: None,
+        }
+    }
+
+    // enemy_base_damage = 10 (mesmo valor dos outros helpers de teste):
+    // bloqueado sem bonus reduz para 10/2 = 5. Budget curto o bastante pra
+    // truncar via `while` depois do(s) `defender()`, sem golpe bonus de
+    // fim de turno a misturar no dano medido.
+    fn run_defender(budget: u32, src: &str, loadout: Option<&Loadout>) -> TurnResult {
+        let program = parse(src).unwrap();
+        let mut vars = HashMap::new();
+        run_turn_with_loadout(&program, &mut vars, budget, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false, loadout).unwrap()
+    }
+
+    fn counter_damage(r: &TurnResult) -> i32 {
+        match r.events.last() {
+            Some(TurnEvent::CounterAttack { damage, blocked, .. }) => {
+                assert!(*blocked, "teste espera contra-ataque bloqueado");
+                *damage
+            }
+            other => panic!("evento inesperado: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shield_with_bigger_bonus_reduces_blocked_counterattack_more() {
+        let src = "defender(escudo.Ouro)\nwhile inimigo.vida > 0:\n    atacar(espada[\"ferro\"])\n";
+        let low = loadout_with_shield("ouro", 1);
+        let high = loadout_with_shield("ouro", 3);
+
+        let r_low = run_defender(7, src, Some(&low));
+        let r_high = run_defender(7, src, Some(&high));
+
+        // base bloqueado = 10/2 = 5; bonus subtrai por cima, piso em 0.
+        assert_eq!(counter_damage(&r_low), 5 - 1);
+        assert_eq!(counter_damage(&r_high), 5 - 3);
+        assert!(counter_damage(&r_high) < counter_damage(&r_low), "escudo com bonus_damage maior precisa reduzir mais o contra-ataque bloqueado");
+    }
+
+    #[test]
+    fn defender_without_item_bonus_reduces_exactly_fifty_percent() {
+        // sem loadout equipado: comportamento identico ao pre-RFC-016.
+        let src = "defender(escudo.Ouro)\nwhile inimigo.vida > 0:\n    atacar(espada[\"ferro\"])\n";
+        let r = run_defender(7, src, None);
+        assert_eq!(counter_damage(&r), 5, "sem item equipado, defender() deve reduzir exatamente 50%, igual ao comportamento pre-RFC-016");
+    }
+
+    #[test]
+    fn second_defender_call_in_same_turn_overwrites_the_first_for_bonus_purposes() {
+        // escudo equipado eh "ouro" (bonus 6): se o primeiro defender()
+        // (com "ouro") fosse o que contasse, o bonus se aplicaria e o dano
+        // cairia a 0. A regra e' que só o ULTIMO conta -- e o ultimo usa
+        // "prata", que nao bate com o equipado, bonus zero, dano = 5.
+        let src = "defender(escudo.Ouro)\ndefender(escudo.Prata)\nwhile inimigo.vida > 0:\n    atacar(espada[\"ferro\"])\n";
+        let loadout = loadout_with_shield("ouro", 6);
+        let r = run_defender(8, src, Some(&loadout));
+        assert_eq!(counter_damage(&r), 5, "so o ultimo defender() do turno deve contar para o bonus");
     }
 
     // --- RFC-004: invocar (threads de invocacao do necromante) --------

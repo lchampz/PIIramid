@@ -21,6 +21,7 @@ use scenes::menu::MenuScene;
 use scenes::overworld::OverworldScene;
 use scenes::style_guide::StyleGuideScene;
 use scenes::Transition;
+use ui::pause_menu::{PauseAction, PauseOverlay};
 
 enum Scene {
     Menu(MenuScene),
@@ -45,13 +46,44 @@ async fn main() {
 
     let mut scene = Scene::Menu(MenuScene::new(&assets));
 
+    // RFC-019: pausa só existe enquanto `scene` é `Scene::Overworld` (que
+    // também cobre o duelo -- `DuelScene` vive dentro de `OverworldScene`,
+    // não é variante própria de `Scene`). Estado central aqui, não
+    // duplicado dentro de `OverworldScene`/`DuelScene` (RFC-019, não-objetivo 3).
+    let mut paused = false;
+    let mut pause_overlay = PauseOverlay::new();
+
     loop {
-        let transition = match &mut scene {
-            Scene::Menu(s) => s.update(),
-            Scene::Overworld(s) => s.update(),
-            Scene::GameOver(s) => s.update(),
-            Scene::Grimoire(s) => s.update(),
-            Scene::StyleGuide(s) => s.update(),
+        let in_overworld = matches!(scene, Scene::Overworld(_));
+
+        // RFC-019 regra 2: único lugar que lê `ESC` para pausa -- alterna.
+        // `PauseOverlay::update` (abaixo) nunca lê `ESC`, só clique nos
+        // botões, senão o mesmo toggle aconteceria duas vezes no mesmo
+        // frame (pausa e despausa de volta sem o jogador perceber).
+        if in_overworld && is_key_pressed(KeyCode::Escape) {
+            paused = !paused;
+        }
+
+        let transition = if in_overworld && paused {
+            // RFC-019 regra 3: `OverworldScene::update()` não é chamado
+            // enquanto pausado -- é isto que congela o jogo de verdade
+            // (nenhum monstro anima, nenhum turno de duelo avança).
+            match pause_overlay.update() {
+                Some(PauseAction::Continue) => {
+                    paused = false;
+                    None
+                }
+                Some(PauseAction::GoToMenu) => Some(Transition::GoToMenu),
+                None => None,
+            }
+        } else {
+            match &mut scene {
+                Scene::Menu(s) => s.update(),
+                Scene::Overworld(s) => s.update(),
+                Scene::GameOver(s) => s.update(),
+                Scene::Grimoire(s) => s.update(),
+                Scene::StyleGuide(s) => s.update(),
+            }
         };
 
         if let Some(t) = transition {
@@ -63,6 +95,9 @@ async fn main() {
                 Transition::GoToStyleGuide => scene = Scene::StyleGuide(StyleGuideScene::new()),
                 Transition::Quit => break,
             }
+            // Toda transição encerra a pausa -- ela só faz sentido dentro
+            // da instância de overworld em que foi aberta (RFC-019, regra 1).
+            paused = false;
         }
 
         match &scene {
@@ -71,6 +106,12 @@ async fn main() {
             Scene::GameOver(s) => s.draw(&assets),
             Scene::Grimoire(s) => s.draw(&assets),
             Scene::StyleGuide(s) => s.draw(&assets),
+        }
+
+        // RFC-019 regra 3: `draw()` da cena continua rodando por baixo do
+        // véu -- só o desenho da sobreposição é condicional.
+        if in_overworld && paused {
+            pause_overlay.draw(&assets);
         }
 
         next_frame().await;

@@ -6,6 +6,7 @@
 use macroquad::prelude::*;
 
 use crate::assets::Assets;
+use crate::config::{HEIGHT, SPRITE_FRAME, WIDTH};
 use crate::inventory::SaveData;
 use crate::monsters::data;
 use crate::monsters::MonsterState;
@@ -100,7 +101,21 @@ impl OverworldScene {
                     self.save.save();
                     return Some(Transition::GoToGameOver { won: false, turns: duel.turn(), player_hp: self.player.life_points });
                 }
-                Some(DuelOutcome::Fled) => {}
+                Some(DuelOutcome::Fled) => {
+                    // Bug de gameplay achado em playtest gravado: fugir não
+                    // afastava o jogador do monstro, então no frame
+                    // seguinte `overlaps()` (abaixo, no loop de colisão)
+                    // continuava verdadeiro e o mesmo duelo recomeçava na
+                    // hora -- "fugir" parecia simplesmente não funcionar.
+                    // Empurra o jogador na direção oposta ao monstro por
+                    // mais que 2x SPRITE_FRAME (64px), suficiente pra
+                    // limpar a sobreposição de AABB mesmo se as duas
+                    // hitboxes estivessem exatamente coincidentes.
+                    let away = (self.player.position - foe.entity.position).normalize_or_zero();
+                    let away = if away.length_squared() < f32::EPSILON { vec2(0.0, -1.0) } else { away };
+                    let pushed = self.player.position + away * (SPRITE_FRAME * 2.0);
+                    self.player.position = pushed.clamp(vec2(0.0, 0.0), vec2(WIDTH - SPRITE_FRAME, HEIGHT - SPRITE_FRAME));
+                }
                 None => {
                     self.duel = Some((idx, duel));
                 }

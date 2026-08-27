@@ -126,6 +126,22 @@ pub struct Vm<'a> {
     /// zero, nunca erro (regra 9, mesmo espírito de "ausência nunca é
     /// erro" da RFC-002).
     bag: Option<&'a Bag>,
+
+    /// Custo de tamanho (RFC-024) cobrado uma única vez no início de
+    /// `exec_program`, guardado à parte de `cycles_used` por um motivo
+    /// específico: `Weakness::Eficiencia` (`resolve_attack_by_weakness`)
+    /// compara `cycles_used` contra `max_ciclos` em valor **absoluto**, não
+    /// contra o orçamento restante — é a única das 7 fraquezas que lê o
+    /// contador dessa forma. Sem subtrair este campo, o custo de tamanho
+    /// (que mede o *texto escrito*, um eixo que essa fraqueza nunca avaliou)
+    /// se somaria à leitura de "quantos ciclos a execução gastou",
+    /// corrompendo o limiar de eficiência do Zumbi para qualquer script,
+    /// mesmo um curto — não é recalibração, é mudar silenciosamente o que
+    /// `Weakness::Eficiencia` mede, o que o não-objetivo 2 da RFC-024
+    /// proíbe. `resolve_attack_by_weakness` usa
+    /// `cycles_used.saturating_sub(size_charge)` para continuar
+    /// comparando só ciclos de execução, exatamente como antes desta RFC.
+    size_charge: u32,
 }
 
 /// Percorre os `Stmt` de nível superior do programa e registra todo
@@ -157,6 +173,31 @@ fn collect_funcs(program: &[Stmt]) -> Result<HashMap<String, Vec<Stmt>>, ScriptE
         }
     }
     Ok(funcs)
+}
+
+/// Conta recursivamente quantos `Stmt` existem na árvore — o "tamanho do
+/// texto escrito" que `STMT_SIZE_COST` cobra (RFC-024, regra 2). Desce em
+/// todo corpo aninhado (`if`/`while`/`for`/`func`/`invocar`): cada `Stmt`
+/// conta uma vez só, não importa quantas vezes o laço/função ao redor dele
+/// executa em runtime. Isso é o que faz reusar uma `func` mais barato que
+/// reescrever o corpo (regra 3): o corpo de um `FuncDef` só aparece uma vez
+/// nesta árvore, na própria definição — cada chamada (`golpe()`) é só a `1`
+/// `Stmt` da linha de chamada, o corpo não é contado de novo.
+fn count_stmts(stmts: &[Stmt]) -> u32 {
+    stmts.iter().map(count_stmt).sum()
+}
+
+fn count_stmt(stmt: &Stmt) -> u32 {
+    1 + match &stmt.kind {
+        StmtKind::Expr(_) | StmtKind::Assign(_, _) => 0,
+        StmtKind::If { then_branch, else_branch, .. } => {
+            count_stmts(then_branch) + else_branch.as_ref().map(|e| count_stmts(e)).unwrap_or(0)
+        }
+        StmtKind::While { body, .. } => count_stmts(body),
+        StmtKind::For { body, .. } => count_stmts(body),
+        StmtKind::FuncDef { body, .. } => count_stmts(body),
+        StmtKind::Invoke { body, .. } => count_stmts(body),
+    }
 }
 
 /// Assinatura pré-RFC-002, preservada byte a byte para não exigir mudança
@@ -535,6 +576,7 @@ impl<'a> Vm<'a> {
             loadout,
             player_class,
             bag,
+            size_charge: 0,
         }
     }
 
@@ -551,6 +593,22 @@ impl<'a> Vm<'a> {
     }
 
     fn exec_program(&mut self, program: &[Stmt]) -> VResult<()> {
+        // RFC-024 regra 2/4: custo de tamanho cobrado uma única vez, antes
+        // de qualquer instrução executar, contra o mesmo orçamento do turno
+        // — não é um segundo recurso. `exec_program` é o único ponto de
+        // entrada que tanto `run_turn_with_bag` (segunda passada, real)
+        // quanto `probe_pass`/`probe_turn_with_bag` (RFC-018, validação ao
+        // vivo) atravessam, então cobrar aqui satisfaz a regra 5 de graça —
+        // sem duplicar a cobrança nos dois lugares. Estourar aqui é
+        // `Signal::Truncated` normal (contra-ataque incluso), igual a
+        // qualquer outro `charge`. Programa vazio conta 0 `Stmt`, custa 0 —
+        // usa a linha 1 como âncora só para o relato de truncamento (nunca
+        // dispara nesse caso, custo é 0).
+        let size = count_stmts(program);
+        let line = program.first().map(|s| s.line).unwrap_or(1);
+        let cost = size * api::STMT_SIZE_COST;
+        self.charge(line, cost)?;
+        self.size_charge = cost;
         self.exec_block(program)
     }
 
@@ -1055,7 +1113,11 @@ impl<'a> Vm<'a> {
                 }
             }
             Weakness::Eficiencia { max_ciclos } => {
-                if self.cycles_used <= max_ciclos {
+                // RFC-024: subtrai o custo de tamanho antes de comparar --
+                // ver o doc comment de `size_charge` no struct `Vm`. Este
+                // limiar sempre mediu ciclos de *execução*, nunca o tamanho
+                // do script escrito.
+                if self.cycles_used.saturating_sub(self.size_charge) <= max_ciclos {
                     (BASE_ATTACK_DAMAGE, true)
                 } else {
                     (BASE_ATTACK_DAMAGE / 8, false)
@@ -1359,9 +1421,12 @@ mod tests {
 
     #[test]
     fn function_call_cost_is_user_call_cost_plus_body_cost() {
+        // RFC-024: cycles_used tambem inclui o custo de tamanho agora --
+        // FuncDef(1) + corpo (atacar+defender, 2) + chamada combo() (1) = 4
+        // `Stmt` -> STMT_SIZE_COST*4 = 8, somado uma vez no inicio do turno.
         let src = "func combo():\n    atacar(espada[\"ferro\"])\n    defender(escudo[\"ouro\"])\n\ncombo()\n";
         let r = run(src, 20, Weakness::Elemento(Element::Fogo), Posture::Guarda);
-        assert_eq!(r.cycles_used, api::USER_CALL_COST + 2 + 1);
+        assert_eq!(r.cycles_used, api::USER_CALL_COST + 2 + 1 + 4 * api::STMT_SIZE_COST);
     }
 
     #[test]
@@ -1420,6 +1485,15 @@ mod tests {
         // por acidente via o golpe bonus. (O orcamento calibrado em si nao
         // muda o resultado desta comparacao -- so precisa caber as duas
         // versoes sem truncar, o que qualquer orcamento >= 5 ja garante.)
+        //
+        // RFC-024: `with_func` tambem escreve 2 `Stmt` a mais que
+        // `without_func` (o `FuncDef` e a chamada `combo()`, que nao existem
+        // na versao inline) -- o custo de tamanho extra (2*STMT_SIZE_COST)
+        // se soma ao USER_CALL_COST de execucao. A abstracao continua nunca
+        // mais barata que o inline; agora ela e mais cara em duas frentes
+        // (execucao E tamanho), o que so reforca a regra 3 da RFC (reusar
+        // uma func e mais barato que reescrever, mas uma unica chamada sem
+        // reuso paga o preco de tela por ela).
         let with_func = "func combo():\n    if inimigo.postura == \"guarda\":\n        atacar(espada[\"ferro\"])\n    else:\n        esperar()\n\ncombo()\n";
         let without_func = "if inimigo.postura == \"guarda\":\n    atacar(espada[\"ferro\"])\nelse:\n    esperar()\n";
 
@@ -1429,8 +1503,9 @@ mod tests {
 
         assert!(!with.truncated);
         assert!(!without.truncated);
-        assert_eq!(with.cycles_used, without.cycles_used + api::USER_CALL_COST);
-        assert_eq!(with.enemy_life, without.enemy_life + api::USER_CALL_COST as i32);
+        let extra = api::USER_CALL_COST + 2 * api::STMT_SIZE_COST;
+        assert_eq!(with.cycles_used, without.cycles_used + extra);
+        assert_eq!(with.enemy_life, without.enemy_life + extra as i32);
 
         let effective_hit = |r: &TurnResult| match &r.events[0] {
             TurnEvent::Attacked { effective, damage, .. } => (*effective, *damage),
@@ -1496,8 +1571,14 @@ mod tests {
         // pra provar que o script de referencia sempre vence dentro de um
         // orcamento apertado; o ritmo real do Aker calibrado esta em
         // `guardiao_rhythm_within_target_range`.
+        //
+        // RFC-024: 4 `Stmt` (inspecionar + if + atacar/esperar nos dois
+        // ramos) -> custo de tamanho +8, cobrado uma vez por turno.
+        // Orcamento sobe de 10 para 18 pra preservar a mesma folga de antes
+        // desta RFC no pior caso (guarda: 3+1+2=6 de execucao + 8 de
+        // tamanho = 14, folga de 4 ciclos, igual a antes).
         let src = "inspecionar()\nif inimigo.postura == \"guarda\":\n    atacar(espada.Bronze)\nelse:\n    esperar()\n";
-        let budget = 10;
+        let budget = 18;
         let mut life = 150;
         let mut posture = Posture::Guarda;
         let mut turns = 0;
@@ -1529,15 +1610,25 @@ mod tests {
         // composta de DuploSelo nunca vale, e todo golpe usa a reducao:
         // 5 x (BASE_ATTACK_DAMAGE=12 / 8) = 5 x 1 = 5 dano/turno.
         // 150 vida / 5 dano/turno = 30 turnos.
+        //
+        // RFC-024: cada script agora tambem paga STMT_SIZE_COST por Stmt
+        // escrito, uma vez por turno, antes da execucao. Somar esse custo de
+        // tamanho ao orcamento de cada script (em vez de a um orcamento
+        // compartilhado) preserva `remaining` -- e portanto o dano e a
+        // contagem de turnos -- identicos a antes desta RFC:
+        // `budget_novo = budget_antigo + count_stmts(script) * STMT_SIZE_COST`
+        // faz `cycles_used_novo - budget_novo == cycles_used_antigo -
+        // budget_antigo` para qualquer execucao do mesmo script. Ingenua: 5
+        // `Stmt` -> +10; orcamento 10 -> 20.
         let naive_src = "atacar(espada.Bronze)\natacar(espada.Bronze)\natacar(espada.Bronze)\natacar(espada.Bronze)\natacar(espada.Bronze)\n";
-        let budget = 10;
+        let naive_budget = 20;
         let mut life = 150;
         let mut posture = Posture::Guarda;
         let mut naive_turns = 0;
         while life > 0 && naive_turns < 200 {
             let program = parse(naive_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 150, posture, Weakness::DuploSelo, 9, false).unwrap();
-            assert!(!r.truncated, "spam ingenuo (5x atacar = 10 ciclos) nao deveria estourar o orcamento de 10");
+            let r = run_turn(&program, &mut HashMap::new(), naive_budget, 100, 100, life, 150, posture, Weakness::DuploSelo, 9, false).unwrap();
+            assert!(!r.truncated, "spam ingenuo (5x atacar = 10 ciclos + 10 de tamanho) nao deveria estourar o orcamento de 20");
             life = r.enemy_life;
             posture = posture.toggled();
             naive_turns += 1;
@@ -1548,14 +1639,16 @@ mod tests {
         // inspeciona sempre, ataca so na guarda, espera na aberta. So a
         // reducao de dano do braco "condicoes nao compostas" mudou; o braco
         // de sucesso (BASE_ATTACK_DAMAGE cheio) e igual ao de antes, logo o
-        // resultado continua ~15 turnos, nao mudou com a correcao do /8.
+        // resultado continua ~15 turnos, nao mudou com a correcao do /8 nem
+        // com o custo de tamanho (4 `Stmt` -> +8; orcamento 10 -> 18).
         let correct_src = "inspecionar()\nif inimigo.postura == \"guarda\":\n    atacar(espada.Bronze)\nelse:\n    esperar()\n";
+        let correct_budget = 18;
         let mut life = 150;
         let mut posture = Posture::Guarda;
         let mut correct_turns = 0;
         while life > 0 && correct_turns < 200 {
             let program = parse(correct_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 150, posture, Weakness::DuploSelo, 9, false).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), correct_budget, 100, 100, life, 150, posture, Weakness::DuploSelo, 9, false).unwrap();
             assert!(!r.truncated, "script de referencia nao pode estourar o orcamento calibrado");
             life = r.enemy_life;
             posture = posture.toggled();
@@ -1723,14 +1816,20 @@ mod tests {
         // Ingenua: atacar() cabe 8x em 16 ciclos (8x2=16, sem sobra).
         // depth==0 o turno inteiro -> cada golpe usa a reducao (RFC-021: /8):
         // 8 x (BASE_ATTACK_DAMAGE=12 / 8) = 8 x 1 = 8 dano/turno.
+        //
+        // RFC-024: mesma tecnica de `duplo_selo_naive_spam_never_beats_
+        // composed_script_rfc_011` -- somar STMT_SIZE_COST*count_stmts ao
+        // orcamento de CADA script preserva `remaining` (e portanto o dano e
+        // a contagem de turnos) identicos a antes desta RFC. Ingenua: 8
+        // `Stmt` -> +16; orcamento 16 -> 32.
         let naive_src = "atacar(espada.Bronze)\n".repeat(8);
-        let budget = 16;
+        let naive_budget = 32;
         let mut life = 150;
         let mut naive_turns = 0;
         while life > 0 && naive_turns < 200 {
             let program = parse(&naive_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeNomeacao, 8, false).unwrap();
-            assert!(!r.truncated, "spam ingenuo (8x atacar = 16 ciclos) nao deveria estourar o orcamento de 16");
+            let r = run_turn(&program, &mut HashMap::new(), naive_budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeNomeacao, 8, false).unwrap();
+            assert!(!r.truncated, "spam ingenuo (8x atacar = 16 ciclos + 16 de tamanho) nao deveria estourar o orcamento de 32");
             life = r.enemy_life;
             naive_turns += 1;
         }
@@ -1739,14 +1838,16 @@ mod tests {
         // Correta: golpe() custa USER_CALL_COST(1) + atacar(2) = 3 ciclos
         // por invocacao; cabe 5x em 16 (5x3=15, sobra 1 -> golpe bonus de
         // fim de turno). depth>0 dentro do corpo de golpe() -> dano cheio:
-        // 5 x 12 + 1 (bonus) = 61 dano/turno.
+        // 5 x 12 + 1 (bonus) = 61 dano/turno. Tamanho: FuncDef(1) + corpo(1)
+        // + 5 chamadas = 7 `Stmt` -> +14; orcamento 16 -> 30.
         let correct_src = "func golpe():\n    atacar(espada.Bronze)\n\n".to_string() + &"golpe()\n".repeat(5);
+        let correct_budget = 30;
         let mut life = 150;
         let mut correct_turns = 0;
         while life > 0 && correct_turns < 200 {
             let program = parse(&correct_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeNomeacao, 8, false).unwrap();
-            assert!(!r.truncated, "script com func nao pode estourar o orcamento calibrado de 16");
+            let r = run_turn(&program, &mut HashMap::new(), correct_budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeNomeacao, 8, false).unwrap();
+            assert!(!r.truncated, "script com func nao pode estourar o orcamento calibrado de 30");
             life = r.enemy_life;
             correct_turns += 1;
         }
@@ -1766,8 +1867,11 @@ mod tests {
 
     #[test]
     fn attack_with_two_invocations_this_turn_deals_full_damage() {
+        // RFC-024: 5 `Stmt` (2 `invocar` de 2 cada + 1 `atacar`) -> +10 de
+        // tamanho, somados aos 6 ciclos de execucao (2*INVOKE_COST=4 +
+        // atacar=2) = 16; orcamento sobe de 12 para 22 pra caber com folga.
         let src = "invocar a:\n    esperar()\ninvocar b:\n    esperar()\natacar(espada.Bronze)\n";
-        let r = run(src, 12, Weakness::ExigeInvocacaoDupla, Posture::Guarda);
+        let r = run(src, 22, Weakness::ExigeInvocacaoDupla, Posture::Guarda);
         match r.events.iter().find(|e| matches!(e, TurnEvent::Attacked { .. })) {
             Some(TurnEvent::Attacked { effective, damage, .. }) => {
                 assert!(*effective, "com 2 invocacoes no turno o ataque precisa ser efetivo");
@@ -1815,14 +1919,19 @@ mod tests {
         // Ingenua: atacar() cabe 6x em 12 ciclos (6x2=12, sem sobra).
         // invocations_this_turn == 0 o turno inteiro -> reducao (RFC-021: /8):
         // 6 x (BASE_ATTACK_DAMAGE=12 / 8) = 6 x 1 = 6 dano/turno.
+        //
+        // RFC-024: mesma tecnica de orcamentos separados (naive/correct) que
+        // as demais bases de ordenacao -- soma STMT_SIZE_COST*count_stmts ao
+        // orcamento de cada script, preservando `remaining` (e o resultado)
+        // identico a antes desta RFC. Ingenua: 6 `Stmt` -> +12; 12 -> 24.
         let naive_src = "atacar(espada.Bronze)\n".repeat(6);
-        let budget = 12;
+        let naive_budget = 24;
         let mut life = 150;
         let mut naive_turns = 0;
         while life > 0 && naive_turns < 200 {
             let program = parse(&naive_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeInvocacaoDupla, 9, false).unwrap();
-            assert!(!r.truncated, "spam ingenuo (6x atacar = 12 ciclos) nao deveria estourar o orcamento de 12");
+            let r = run_turn(&program, &mut HashMap::new(), naive_budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeInvocacaoDupla, 9, false).unwrap();
+            assert!(!r.truncated, "spam ingenuo (6x atacar = 12 ciclos + 12 de tamanho) nao deveria estourar o orcamento de 24");
             life = r.enemy_life;
             naive_turns += 1;
         }
@@ -1832,14 +1941,16 @@ mod tests {
         // principal) + atacar() cabe 4x nos 8 ciclos restantes (4x2=8, sem
         // sobra) = 12 ciclos, exatamente o orcamento. invocations_this_turn
         // == 2 antes do primeiro atacar() -> dano cheio:
-        // 4 x BASE_ATTACK_DAMAGE(12) = 48 dano/turno.
+        // 4 x BASE_ATTACK_DAMAGE(12) = 48 dano/turno. Tamanho: 2 `invocar`
+        // (2 `Stmt` cada) + 4 `atacar()` = 8 `Stmt` -> +16; 12 -> 28.
         let correct_src = "invocar a:\n    esperar()\ninvocar b:\n    esperar()\n".to_string() + &"atacar(espada.Bronze)\n".repeat(4);
+        let correct_budget = 28;
         let mut life = 150;
         let mut correct_turns = 0;
         while life > 0 && correct_turns < 200 {
             let program = parse(&correct_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeInvocacaoDupla, 9, false).unwrap();
-            assert!(!r.truncated, "2 invocacoes + 4 atacar() (12 ciclos) nao pode estourar o orcamento calibrado de 12");
+            let r = run_turn(&program, &mut HashMap::new(), correct_budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeInvocacaoDupla, 9, false).unwrap();
+            assert!(!r.truncated, "2 invocacoes + 4 atacar() (12 ciclos + 16 de tamanho) nao pode estourar o orcamento calibrado de 28");
             life = r.enemy_life;
             correct_turns += 1;
         }
@@ -1881,8 +1992,8 @@ mod tests {
 
         // budget == custo exato de atacar() (2 ciclos): sem ciclo sobrando,
         // sem golpe bonus de fim de turno a misturar no dano medido.
-        let r_low = run_with_loadout(src, 2, Weakness::ExigeGuarda, Posture::Guarda, Some(&low));
-        let r_high = run_with_loadout(src, 2, Weakness::ExigeGuarda, Posture::Guarda, Some(&high));
+        let r_low = run_with_loadout(src, 4, Weakness::ExigeGuarda, Posture::Guarda, Some(&low));
+        let r_high = run_with_loadout(src, 4, Weakness::ExigeGuarda, Posture::Guarda, Some(&high));
 
         // Weakness::ExigeGuarda em Posture::Guarda -> dano cheio
         // (BASE_ATTACK_DAMAGE=12) + bônus do item equipado.
@@ -1895,7 +2006,7 @@ mod tests {
     fn equipped_item_bonus_is_case_insensitive_on_name_match() {
         let src = "atacar(espada.Ferro)\n";
         let loadout = loadout_with_sword("FERRO", 5);
-        let r = run_with_loadout(src, 2, Weakness::ExigeGuarda, Posture::Guarda, Some(&loadout));
+        let r = run_with_loadout(src, 4, Weakness::ExigeGuarda, Posture::Guarda, Some(&loadout));
         assert_eq!(100 - r.enemy_life, 12 + 5, "nome do item equipado deve casar case-insensitive com o nome citado no script");
     }
 
@@ -1918,7 +2029,7 @@ mod tests {
         let src = "atacar(espada.Ferro)\n";
         // item equipado no slot certo, mas nome diferente do citado no script.
         let wrong_name = loadout_with_sword("bronze", 20);
-        let r = run_with_loadout(src, 2, Weakness::ExigeGuarda, Posture::Guarda, Some(&wrong_name));
+        let r = run_with_loadout(src, 4, Weakness::ExigeGuarda, Posture::Guarda, Some(&wrong_name));
         assert_eq!(100 - r.enemy_life, 12, "nome diferente do equipado nao deve conceder bonus (item ausente/errado nunca e erro, so bonus zero)");
     }
 
@@ -1935,8 +2046,8 @@ mod tests {
         // budget == custo exato de atacar() (2 ciclos): sem ciclo sobrando,
         // sem golpe bonus de fim de turno a misturar no dano medido.
         let src = "atacar(espada.Ferro)\n";
-        let sem_classe = run_with_class(src, 2, Weakness::ExigeGuarda, Posture::Guarda, None);
-        let guerreiro = run_with_class(src, 2, Weakness::ExigeGuarda, Posture::Guarda, Some(PlayerClass::Guerreiro));
+        let sem_classe = run_with_class(src, 4, Weakness::ExigeGuarda, Posture::Guarda, None);
+        let guerreiro = run_with_class(src, 4, Weakness::ExigeGuarda, Posture::Guarda, Some(PlayerClass::Guerreiro));
 
         assert_eq!(100 - sem_classe.enemy_life, 12, "sem classe, dano deve ser o dano base de atacar() em Weakness::ExigeGuarda/Posture::Guarda");
         assert_eq!(100 - guerreiro.enemy_life, 12 + api::CLASS_BONUS_DAMAGE, "Guerreiro atacando com espada deve receber CLASS_BONUS_DAMAGE");
@@ -1989,8 +2100,8 @@ mod tests {
     #[test]
     fn mago_attacking_with_magia_deals_more_damage_than_without_class() {
         let src = "atacar(magia.Fogo)\n";
-        let sem_classe = run_with_class(src, 2, Weakness::Elemento(Element::Fogo), Posture::Guarda, None);
-        let mago = run_with_class(src, 2, Weakness::Elemento(Element::Fogo), Posture::Guarda, Some(PlayerClass::Mago));
+        let sem_classe = run_with_class(src, 4, Weakness::Elemento(Element::Fogo), Posture::Guarda, None);
+        let mago = run_with_class(src, 4, Weakness::Elemento(Element::Fogo), Posture::Guarda, Some(PlayerClass::Mago));
         assert_eq!(100 - mago.enemy_life, (100 - sem_classe.enemy_life) + api::CLASS_BONUS_DAMAGE);
     }
 
@@ -1999,8 +2110,8 @@ mod tests {
         // ladrao ataca com pocao (RFC-003: afinidade tematica, nao ha
         // restricao de atacar com pocao na linguagem -- e so um ItemKind).
         let src = "atacar(pocao.Vida)\n";
-        let sem_classe = run_with_class(src, 2, Weakness::ExigeGuarda, Posture::Guarda, None);
-        let ladrao = run_with_class(src, 2, Weakness::ExigeGuarda, Posture::Guarda, Some(PlayerClass::Ladrao));
+        let sem_classe = run_with_class(src, 4, Weakness::ExigeGuarda, Posture::Guarda, None);
+        let ladrao = run_with_class(src, 4, Weakness::ExigeGuarda, Posture::Guarda, Some(PlayerClass::Ladrao));
         assert_eq!(100 - ladrao.enemy_life, (100 - sem_classe.enemy_life) + api::CLASS_BONUS_DAMAGE);
     }
 
@@ -2014,8 +2125,12 @@ mod tests {
     // nenhuma assertion do teste original.
     #[test]
     fn exige_nomeacao_named_func_beats_naive_spam_with_class_bonus_still_holds() {
+        // RFC-024: mesmos orcamentos separados (naive/correct) que
+        // `exige_nomeacao_named_func_beats_naive_spam_in_fewer_turns` usa --
+        // ver o comentario la para a derivacao (16 -> 32 ingenua, 16 -> 30
+        // correta).
         let naive_src = "atacar(espada.Bronze)\n".repeat(8);
-        let budget = 16;
+        let naive_budget = 32;
         let mut life = 150;
         let mut naive_turns = 0;
         while life > 0 && naive_turns < 200 {
@@ -2024,7 +2139,7 @@ mod tests {
             let r = run_turn_with_loadout_and_class(
                 &program,
                 &mut vars,
-                budget,
+                naive_budget,
                 100,
                 100,
                 life,
@@ -2044,6 +2159,7 @@ mod tests {
         assert_eq!(life, 0);
 
         let correct_src = "func golpe():\n    atacar(espada.Bronze)\n\n".to_string() + &"golpe()\n".repeat(5);
+        let correct_budget = 30;
         let mut life = 150;
         let mut correct_turns = 0;
         while life > 0 && correct_turns < 200 {
@@ -2052,7 +2168,7 @@ mod tests {
             let r = run_turn_with_loadout_and_class(
                 &program,
                 &mut vars,
-                budget,
+                correct_budget,
                 100,
                 100,
                 life,
@@ -2113,8 +2229,8 @@ mod tests {
 
     #[test]
     fn equipped_potion_bonus_damage_heals_more() {
-        let sem_pocao = run_curar(4, None, None);
-        let com_pocao = run_curar(4, Some(&loadout_with_potion("vida", 6)), None);
+        let sem_pocao = run_curar(6, None, None);
+        let com_pocao = run_curar(6, Some(&loadout_with_potion("vida", 6)), None);
 
         assert_eq!(sem_pocao.player_life, 50 + HEAL_AMOUNT, "sem pocao equipada, cura deve ser exatamente HEAL_AMOUNT");
         assert_eq!(com_pocao.player_life, 50 + HEAL_AMOUNT + 6, "pocao equipada com bonus_damage deve curar mais");
@@ -2123,9 +2239,9 @@ mod tests {
 
     #[test]
     fn ladrao_using_curar_gets_class_bonus_guerreiro_does_not() {
-        let sem_classe = run_curar(4, None, None);
-        let ladrao = run_curar(4, None, Some(PlayerClass::Ladrao));
-        let guerreiro = run_curar(4, None, Some(PlayerClass::Guerreiro));
+        let sem_classe = run_curar(6, None, None);
+        let ladrao = run_curar(6, None, Some(PlayerClass::Ladrao));
+        let guerreiro = run_curar(6, None, Some(PlayerClass::Guerreiro));
 
         assert_eq!(ladrao.player_life, sem_classe.player_life + api::CLASS_BONUS_DAMAGE, "Ladrao usando curar() com pocao deve receber CLASS_BONUS_DAMAGE");
         assert_eq!(guerreiro.player_life, sem_classe.player_life, "afinidade do Guerreiro e Espada, nao Pocao -- curar() nao deve conceder bonus");
@@ -2134,7 +2250,7 @@ mod tests {
     #[test]
     fn curar_without_item_or_class_heals_exactly_heal_amount() {
         // sem loadout e sem classe: mesmo comportamento de antes da RFC-014.
-        let r = run_curar(4, None, None);
+        let r = run_curar(6, None, None);
         assert_eq!(r.player_life, 50 + HEAL_AMOUNT, "sem item/classe, curar() deve curar exatamente HEAL_AMOUNT, igual ao comportamento pre-RFC-014");
     }
 
@@ -2201,9 +2317,12 @@ mod tests {
         // (com "ouro") fosse o que contasse, o bonus se aplicaria e o dano
         // cairia a 0. A regra e' que só o ULTIMO conta -- e o ultimo usa
         // "prata", que nao bate com o equipado, bonus zero, dano = 5.
+        // RFC-024: 4 `Stmt` (2 defender + 1 while + 1 atacar no corpo) -> +8
+        // de tamanho, somado ao orcamento pra preservar a mesma dinamica de
+        // truncamento de antes desta RFC (8 -> 16).
         let src = "defender(escudo.Ouro)\ndefender(escudo.Prata)\nwhile inimigo.vida > 0:\n    atacar(espada[\"ferro\"])\n";
         let loadout = loadout_with_shield("ouro", 6);
-        let r = run_defender(8, src, Some(&loadout));
+        let r = run_defender(16, src, Some(&loadout));
         assert_eq!(counter_damage(&r), 5, "so o ultimo defender() do turno deve contar para o bonus");
     }
 
@@ -2211,8 +2330,11 @@ mod tests {
 
     #[test]
     fn invoke_single_attack_deals_real_damage() {
+        // RFC-024: 2 `Stmt` (invocar + atacar no corpo) -> +4 de tamanho,
+        // somados ao INVOKE_COST(2) de execucao no orcamento principal;
+        // orcamento sobe de 4 para 8.
         let src = "invocar esqueleto:\n    atacar(espada.Ferro)\n";
-        let r = run(src, 4, Weakness::ExigeGuarda, Posture::Guarda);
+        let r = run(src, 8, Weakness::ExigeGuarda, Posture::Guarda);
         assert!(r.enemy_life < 100, "atacar() dentro de invocar precisa causar dano real ao inimigo");
         assert!(matches!(r.events[0], TurnEvent::Attacked { .. }));
     }
@@ -2226,10 +2348,11 @@ mod tests {
     #[test]
     fn two_invocations_in_same_turn_sum_damage_to_enemy() {
         let src = "invocar esqueleto:\n    atacar(espada.Ferro)\ninvocar mago_morto:\n    atacar(magia.Fogo)\n";
-        // orcamento principal == exatamente 2*INVOKE_COST: paga as duas
-        // invocacoes e nada mais, sem sobra pra golpe bonus interferir na
-        // medicao do dano.
-        let budget = 2 * api::INVOKE_COST;
+        // orcamento principal == exatamente 2*INVOKE_COST + custo de
+        // tamanho: paga as duas invocacoes e nada mais, sem sobra pra golpe
+        // bonus interferir na medicao do dano. RFC-024: 4 `Stmt` (2
+        // `invocar` de 2 cada) -> +8 de tamanho.
+        let budget = 2 * api::INVOKE_COST + 4 * api::STMT_SIZE_COST;
         let r = run(src, budget, Weakness::ExigeGuarda, Posture::Guarda);
 
         assert!(!r.truncated, "duas invocacoes dentro do orcamento principal nao podem truncar o turno");
@@ -2253,7 +2376,9 @@ mod tests {
         // script principal continua depois do `invocar` e chega ao
         // `esperar()` final.
         let src = "invocar zumbi:\n    atacar(espada.Ferro)\n    atacar(espada.Ferro)\n    atacar(espada.Ferro)\nesperar()\n";
-        let budget = api::INVOKE_COST + 1; // so precisa cobrir invocar + esperar()
+        // RFC-024: 5 `Stmt` (invocar(1) + 3 atacar no corpo + esperar) -> +10
+        // de tamanho, somado ao que ja cobria so invocar + esperar().
+        let budget = api::INVOKE_COST + 1 + 5 * api::STMT_SIZE_COST;
         let r = run(src, budget, Weakness::ExigeGuarda, Posture::Guarda);
 
         assert!(!r.truncated, "estouro de orcamento dentro de invocar nao pode truncar o turno principal");
@@ -2316,8 +2441,10 @@ mod tests {
         // so para chamada de funcao do jogador. Contra ExigeNomeacao
         // (Apagado) isso significa dano reduzido, mesma consequencia de
         // chamar atacar() direto no nivel superior sem nomear uma func.
+        // RFC-024: mesmo orcamento de `invoke_single_attack_deals_real_
+        // damage` (2 `Stmt` -> +4 de tamanho, 4 -> 8).
         let src = "invocar esqueleto:\n    atacar(espada.Ferro)\n";
-        let r = run(src, 4, Weakness::ExigeNomeacao, Posture::Guarda);
+        let r = run(src, 8, Weakness::ExigeNomeacao, Posture::Guarda);
         match &r.events[0] {
             TurnEvent::Attacked { effective, damage, .. } => {
                 assert!(!*effective, "atacar() dentro de invocar sem func interno nao pode ser efetivo contra Apagado");
@@ -2336,13 +2463,20 @@ mod tests {
         // `data.rs::zombie` e a bateria de testes de ordenacao logo abaixo)
         // para que `Weakness::Eficiencia` seja punivel de verdade. RFC-022
         // depois recalibrou os 7 pelo ritmo de combate -- o menor orcamento
-        // do bestiario passa a ser o da Mumia, 6 ciclos (ver
-        // `data.rs::mummy`), nao mais o do Aker (agora 12).
+        // do bestiario passa a ser o da Mumia (ver `data.rs::mummy`), nao
+        // mais o do Aker.
+        //
+        // RFC-024: 5 `Stmt` (2 `invocar` de 2 cada + 1 `atacar`) -> +10 de
+        // tamanho, somados aos 6 ciclos de execucao (2*INVOKE_COST + 1
+        // atacar) = 16 ciclos no orcamento principal. `data.rs::mummy`
+        // fechou seu `cycle_budget` em 16 (em vez do minimo exato de 12)
+        // justamente pra este criterio continuar valendo -- ver o
+        // comentario la.
         let src = "invocar esqueleto:\n    atacar(espada.Ferro)\ninvocar mago_morto:\n    atacar(magia.Fogo)\natacar(espada.Ferro)\n";
         let program = parse(src).unwrap();
-        // custo no orcamento principal: 2*INVOKE_COST + 1 atacar() = 4 + 2 = 6
-        let r = run_turn(&program, &mut HashMap::new(), 6, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
-        assert!(!r.truncated, "script de referencia com duas invocacoes nao pode estourar nem o menor orcamento do bestiario (Mumia, 6)");
+        let budget = data::mummy().cycle_budget;
+        let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
+        assert!(!r.truncated, "script de referencia com duas invocacoes nao pode estourar nem o menor orcamento do bestiario (Mumia, {budget})");
     }
 
     // --- RFC-015: selecionar() sobre a mochila ------------------------
@@ -2441,7 +2575,9 @@ mod tests {
         let bag = bag_of(vec![(ItemKind::Pocao, "vida", 3), (ItemKind::Escudo, "bronze", 0), (ItemKind::Magia, "fogo", 8)]);
         let src = "item = selecionar(mochila, onde: item.tipo == \"pocao\", limite: 1)\n";
         let r = run_with_bag(src, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &bag);
-        assert_eq!(r.cycles_used, api::SELECT_SCAN_COST);
+        // RFC-024: 1 `Stmt` (a atribuicao) -> +1*STMT_SIZE_COST de tamanho,
+        // somado ao custo de varredura.
+        assert_eq!(r.cycles_used, api::SELECT_SCAN_COST + api::STMT_SIZE_COST);
         let (examined, found) = selected_event(&r);
         assert_eq!(examined, 1);
         assert!(found);
@@ -2452,7 +2588,8 @@ mod tests {
         let bag = bag_of(vec![(ItemKind::Pocao, "vida", 3), (ItemKind::Escudo, "bronze", 0), (ItemKind::Magia, "fogo", 8)]);
         let src = "item = selecionar(mochila, onde: item.tipo == \"amuleto\", limite: 1)\n";
         let r = run_with_bag(src, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &bag);
-        assert_eq!(r.cycles_used, api::SELECT_SCAN_COST * bag.0.len() as u32);
+        // RFC-024: 1 `Stmt` (a atribuicao) -> +1*STMT_SIZE_COST de tamanho.
+        assert_eq!(r.cycles_used, api::SELECT_SCAN_COST * bag.0.len() as u32 + api::STMT_SIZE_COST);
         let (examined, found) = selected_event(&r);
         assert_eq!(examined, bag.0.len());
         assert!(!found);
@@ -2492,7 +2629,10 @@ mod tests {
         let mut vars_no_bag = HashMap::new();
         let r = run_turn_with_bag(&program, &mut vars_no_bag, 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false, None, None, None)
             .unwrap();
-        assert_eq!(r.cycles_used, 1, "sem mochila, selecionar nao pode custar ciclo - so o esperar() conta");
+        // RFC-024: 2 `Stmt` (atribuicao + esperar) -> +2*STMT_SIZE_COST=4 de
+        // tamanho, somados ao 1 ciclo de esperar() -- selecionar() em si
+        // continua a custo zero quando nao ha mochila.
+        assert_eq!(r.cycles_used, 1 + 2 * api::STMT_SIZE_COST, "sem mochila, selecionar nao pode custar ciclo - so o esperar() e o tamanho contam");
         assert_eq!(vars_no_bag.get("item"), Some(&Value::Nil));
         let (examined, found) = selected_event(&r);
         assert_eq!(examined, 0);
@@ -2518,7 +2658,7 @@ mod tests {
             Some(&empty_bag),
         )
         .unwrap();
-        assert_eq!(r2.cycles_used, 1);
+        assert_eq!(r2.cycles_used, 1 + 2 * api::STMT_SIZE_COST);
         assert_eq!(vars_empty.get("item"), Some(&Value::Nil));
     }
 
@@ -2673,14 +2813,19 @@ mod tests {
         // 20 ciclos (10x2=20, sem sobra). Elemento nunca casa -> reducao
         // (RFC-021: /8): 10 x (BASE_ATTACK_DAMAGE=12 / 8) = 10 x 1 = 10
         // dano/turno.
+        //
+        // RFC-024: os dois scripts tem o mesmo tamanho (10 `Stmt` cada) --
+        // somar STMT_SIZE_COST*10=20 ao orcamento compartilhado preserva
+        // `remaining` (e o resultado) identico a antes desta RFC pros dois
+        // lados ao mesmo tempo, sem precisar separar em dois orcamentos.
         let naive_src = "atacar(magia[\"agua\"])\n".repeat(10);
-        let budget = 20;
+        let budget = 40;
         let mut life = 100;
         let mut naive_turns = 0;
         while life > 0 && naive_turns < 200 {
             let program = parse(&naive_src).unwrap();
             let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 8, false).unwrap();
-            assert!(!r.truncated, "spam ingenuo (10x atacar = 20 ciclos) nao deveria estourar o orcamento de 20");
+            assert!(!r.truncated, "spam ingenuo (10x atacar = 20 ciclos + 20 de tamanho) nao deveria estourar o orcamento de 40");
             life = r.enemy_life;
             naive_turns += 1;
         }
@@ -2695,7 +2840,7 @@ mod tests {
         while life > 0 && correct_turns < 200 {
             let program = parse(&correct_src).unwrap();
             let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 8, false).unwrap();
-            assert!(!r.truncated, "script com elemento certo nao pode estourar o orcamento calibrado de 20");
+            assert!(!r.truncated, "script com elemento certo nao pode estourar o orcamento calibrado de 40");
             life = r.enemy_life;
             correct_turns += 1;
         }
@@ -2732,31 +2877,42 @@ mod tests {
         // que cabem nos 8 ciclos restantes (4x2=8, total 16=orçamento, sem
         // sobra) saem todos reduzidos (RFC-021: /8):
         // 4 x (BASE_ATTACK_DAMAGE=12 / 8) = 4 x 1 = 4 dano/turno.
+        //
+        // RFC-024: `Weakness::Eficiencia` compara ciclos de *execução* --
+        // `resolve_attack_by_weakness` subtrai `size_charge` antes de
+        // comparar com `max_ciclos` (ver doc comment do campo em `Vm`), pelo
+        // motivo de que o custo de tamanho mede o texto escrito, um eixo que
+        // essa fraqueza nunca avaliou. O calculo de efetividade acima
+        // continua valendo sem alteração. Só o orçamento (que cobre
+        // truncamento, não efetividade) precisa somar o custo de tamanho de
+        // cada script, em orçamentos separados (tamanhos diferentes):
+        // ingênuo 12 `Stmt` -> +24; 16 -> 40.
         let naive_src = "esperar()\n".repeat(8) + &"atacar(espada.Bronze)\n".repeat(4);
-        let budget = 16;
+        let naive_budget = 40;
         let mut life = 80;
         let mut naive_turns = 0;
         while life > 0 && naive_turns < 200 {
             let program = parse(&naive_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 80, Posture::Guarda, Weakness::Eficiencia { max_ciclos: 8 }, 6, false).unwrap();
-            assert!(!r.truncated, "spam perdulario (8 esperar + 4 atacar = 16 ciclos) nao deveria estourar o orcamento de 16");
+            let r = run_turn(&program, &mut HashMap::new(), naive_budget, 100, 100, life, 80, Posture::Guarda, Weakness::Eficiencia { max_ciclos: 8 }, 6, false).unwrap();
+            assert!(!r.truncated, "spam perdulario (8 esperar + 4 atacar = 16 ciclos + 24 de tamanho) nao deveria estourar o orcamento de 40");
             life = r.enemy_life;
             naive_turns += 1;
         }
         assert_eq!(life, 0, "script perdulario precisa vencer eventualmente (senao o teste nao compara nada)");
 
         // Correta: ataca direto, sem enchimento -- 4 atacar() (8 ciclos).
-        // cycles_used nunca passa de 8 (o proprio custo do ultimo ataque
-        // encosta exatamente no limite, "<=" inclui a borda) -> dano cheio
-        // em todos: 4 x BASE_ATTACK_DAMAGE(12) = 48, mais o bonus dos 8
-        // ciclos sobrando (16 orcamento - 8 usados) = 48 + 8 = 56 dano/turno.
+        // cycles_used de execução nunca passa de 8 (o proprio custo do
+        // ultimo ataque encosta exatamente no limite, "<=" inclui a borda)
+        // -> dano cheio em todos: 4 x BASE_ATTACK_DAMAGE(12) = 48, mais o
+        // bonus dos ciclos sobrando. Tamanho: 4 `Stmt` -> +8; 16 -> 24.
         let correct_src = "atacar(espada.Bronze)\n".repeat(4);
+        let correct_budget = 24;
         let mut life = 80;
         let mut correct_turns = 0;
         while life > 0 && correct_turns < 200 {
             let program = parse(&correct_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 80, Posture::Guarda, Weakness::Eficiencia { max_ciclos: 8 }, 6, false).unwrap();
-            assert!(!r.truncated, "script eficiente (4x atacar = 8 ciclos) nao pode estourar o orcamento calibrado de 16");
+            let r = run_turn(&program, &mut HashMap::new(), correct_budget, 100, 100, life, 80, Posture::Guarda, Weakness::Eficiencia { max_ciclos: 8 }, 6, false).unwrap();
+            assert!(!r.truncated, "script eficiente (4x atacar = 8 ciclos + 8 de tamanho) nao pode estourar o orcamento calibrado de 24");
             life = r.enemy_life;
             correct_turns += 1;
         }
@@ -2796,15 +2952,18 @@ mod tests {
         // guarda: 8 x BASE_ATTACK_DAMAGE(12) = 96, + bonus do 1 ciclo
         //   sobrando = 97 dano.
         // aberta: 8 x (BASE_ATTACK_DAMAGE=12 / 8 = 1) = 8, + bonus 1 = 9 dano.
+        //
+        // RFC-024: mesma tecnica de orcamentos separados (naive/correct) que
+        // as demais bases de ordenacao. Ingenua: 8 `Stmt` -> +16; 17 -> 33.
         let naive_src = "atacar(espada.Bronze)\n".repeat(8);
-        let budget = 17;
+        let naive_budget = 33;
         let mut life: i32 = 110;
         let mut posture = Posture::Guarda;
         let mut naive_turns = 0;
         while life > 0 && naive_turns < 200 {
             let program = parse(&naive_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 110, posture, Weakness::ExigeGuarda, 7, false).unwrap();
-            assert!(!r.truncated, "spam cego (8x atacar = 16 de 17 ciclos) nao deveria estourar o orcamento");
+            let r = run_turn(&program, &mut HashMap::new(), naive_budget, 100, 100, life, 110, posture, Weakness::ExigeGuarda, 7, false).unwrap();
+            assert!(!r.truncated, "spam cego (8x atacar = 16 de 17 ciclos + 16 de tamanho) nao deveria estourar o orcamento");
             life = r.enemy_life;
             posture = posture.toggled();
             naive_turns += 1;
@@ -2818,15 +2977,17 @@ mod tests {
         // 16 ciclos restantes como golpe bônus, mais valioso por ciclo do
         // que um ataque reduzido (1 dano / 2 ciclos):
         // guarda: 8 x 12 = 96 dano (sem sobra, sem bonus).
-        // aberta: bonus de 17-1=16 dano.
+        // aberta: bonus de 17-1=16 dano. Tamanho: if(1) + 8 atacar = 9
+        // `Stmt` -> +18; 17 -> 35.
         let correct_src = "if inimigo.postura == \"guarda\":\n".to_string() + &"    atacar(espada.Bronze)\n".repeat(8);
+        let correct_budget = 35;
         let mut life: i32 = 110;
         let mut posture = Posture::Guarda;
         let mut correct_turns = 0;
         while life > 0 && correct_turns < 200 {
             let program = parse(&correct_src).unwrap();
-            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 110, posture, Weakness::ExigeGuarda, 7, false).unwrap();
-            assert!(!r.truncated, "script com if de postura nao pode estourar o orcamento calibrado de 17");
+            let r = run_turn(&program, &mut HashMap::new(), correct_budget, 100, 100, life, 110, posture, Weakness::ExigeGuarda, 7, false).unwrap();
+            assert!(!r.truncated, "script com if de postura nao pode estourar o orcamento calibrado de 35");
             life = r.enemy_life;
             posture = posture.toggled();
             correct_turns += 1;
@@ -3022,6 +3183,110 @@ mod tests {
                 curve,
                 pair[0],
                 pair[1]
+            );
+        }
+    }
+
+    // --- RFC-024: custo por instrução escrita --------------------------
+
+    /// O teste mais importante da RFC-024 (regra 6): prova, rodando a VM de
+    /// verdade (não só a conta em texto do doc comment de
+    /// `api::STMT_SIZE_COST`), que existe um ponto de virada real entre
+    /// desenrolar `N` ataques e escrever um `for` de `N` iterações com o
+    /// mesmo corpo — desenrolado ganha (custa menos ciclos) para `N` pequeno,
+    /// laço ganha para `N` grande, e os dois causam exatamente o mesmo dano
+    /// (mesmo elemento, mesmo item, mesmo número de ataques efetivos) em
+    /// qualquer `N`. Sem essa segunda parte a comparação seria vazia — um
+    /// script mais barato que também causa menos dano não prova nada sobre
+    /// "o algoritmo certo ganha".
+    ///
+    /// Fórmulas (ver doc comment de `STMT_SIZE_COST`): desenrolado
+    /// `(STMT_SIZE_COST + 2) * N` = `4N`; laço
+    /// `STMT_SIZE_COST * 2 + (LOOP_TICK_COST + 2) * N` = `4 + 3N`. Ponto de
+    /// virada entre `N=4` (empate, `16 == 16`) e `N=5` (laço passa a
+    /// vencer, `19 < 20`).
+    #[test]
+    fn unrolled_wins_small_n_loop_wins_large_n_same_damage() {
+        // orçamento generoso o bastante pra nenhum dos dois lados (mesmo o
+        // laço em N=10, 34 ciclos) truncar — o que importa aqui é comparar
+        // `cycles_used`, não simular um duelo real contra um monstro.
+        let budget = 200;
+        let enemy_life = 1_000_000;
+
+        for (n, expected) in [
+            (1u32, std::cmp::Ordering::Less),
+            (3, std::cmp::Ordering::Less),
+            (4, std::cmp::Ordering::Equal),
+            (5, std::cmp::Ordering::Greater),
+            (10, std::cmp::Ordering::Greater),
+        ] {
+            let unrolled_src = "atacar(magia.Fogo)\n".repeat(n as usize);
+            let loop_src = format!("for i in 0..{n}:\n    atacar(magia.Fogo)\n");
+
+            let unrolled_program = parse(&unrolled_src).unwrap();
+            let loop_program = parse(&loop_src).unwrap();
+
+            let unrolled = run_turn(
+                &unrolled_program,
+                &mut HashMap::new(),
+                budget,
+                100,
+                100,
+                enemy_life,
+                enemy_life,
+                Posture::Guarda,
+                Weakness::Elemento(Element::Fogo),
+                10,
+                false,
+            )
+            .unwrap();
+            let looped = run_turn(
+                &loop_program,
+                &mut HashMap::new(),
+                budget,
+                100,
+                100,
+                enemy_life,
+                enemy_life,
+                Posture::Guarda,
+                Weakness::Elemento(Element::Fogo),
+                10,
+                false,
+            )
+            .unwrap();
+
+            assert!(!unrolled.truncated, "N={n}: desenrolado nao pode estourar o orcamento generoso de teste");
+            assert!(!looped.truncated, "N={n}: laco nao pode estourar o orcamento generoso de teste");
+
+            assert_eq!(
+                unrolled.cycles_used.cmp(&looped.cycles_used),
+                expected,
+                "N={n}: esperava {:?} comparando desenrolado ({} ciclos) com laco ({} ciclos)",
+                expected,
+                unrolled.cycles_used,
+                looped.cycles_used
+            );
+
+            // mesmo dano: os dois scripts atacam o elemento certo N vezes,
+            // cada ataque efetivo e com o mesmo dano base -- a diferenca de
+            // custo acima nao vem de fazer menos dano, so de escrever menos
+            // (ou mais) Stmt/ciclo de execucao.
+            let effective_hits = |r: &TurnResult| -> Vec<(bool, i32)> {
+                r.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        TurnEvent::Attacked { effective, damage, .. } => Some((*effective, *damage)),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let unrolled_hits = effective_hits(&unrolled);
+            let looped_hits = effective_hits(&looped);
+            assert_eq!(unrolled_hits.len(), n as usize, "N={n}: desenrolado precisa ter atacado exatamente N vezes");
+            assert_eq!(looped_hits, unrolled_hits, "N={n}: laco precisa causar exatamente o mesmo dano, ataque a ataque, que o desenrolado");
+            assert!(
+                unrolled_hits.iter().all(|(effective, damage)| *effective && *damage == BASE_ATTACK_DAMAGE),
+                "N={n}: todo ataque precisa ser efetivo com dano cheio (mesmo elemento em ambos os scripts): {unrolled_hits:?}"
             );
         }
     }

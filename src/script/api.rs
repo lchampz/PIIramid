@@ -24,6 +24,35 @@ pub const LOOP_TICK_COST: u32 = 1;
 /// Custo de avaliar a condição de um `if`.
 pub const BRANCH_COST: u32 = 1;
 
+/// Custo em ciclos de **ter escrito** um `Stmt`, cobrado uma única vez por
+/// instrução da árvore (RFC-024) — não por quantas vezes ela executa. É o
+/// que desfaz a inversão medida em `ANALISE-por-que-o-jogo-e-facil.md`
+/// (causa 3): antes desta RFC, `LOOP_TICK_COST`/`BRANCH_COST` só cobravam
+/// *execução*, então desenrolar N ataques (`2N` ciclos) sempre batia
+/// qualquer laço — copiar-colar era estritamente melhor.
+///
+/// Com `STMT_SIZE_COST` somado, compare `atacar()` copiado N vezes contra
+/// `for i in 0..N: atacar(...)` (2 `Stmt` escritos, corpo fixo):
+///
+/// - desenrolado: `N` `Stmt` escritos, `2` ciclos de execução cada →
+///   `(STMT_SIZE_COST + 2) * N`
+/// - laço: `2` `Stmt` escritos (fixo, não cresce com N) + `LOOP_TICK_COST`
+///   por iteração (o `for` cobra só nas N passagens reais — a checagem
+///   final que sai do laço é um teste nativo do host, não um `Stmt`
+///   cobrado; `while` cobra também a checagem de saída, por isso custa
+///   1 ciclo a mais que um `for` equivalente) + `2` de `atacar()` por
+///   iteração → `STMT_SIZE_COST * 2 + (LOOP_TICK_COST + 2) * N`
+///
+/// Com `STMT_SIZE_COST = 2` e `LOOP_TICK_COST = 1`: desenrolado `4N`,
+/// laço `4 + 3N` — desenrolado vence até `N=3` (12 < 13), empata em
+/// `N=4` (16 = 16), laço vence a partir de `N=5` (19 < 20). Bate com a
+/// tabela modelada pelo product-manager na RFC-024. Ver o teste de ponto
+/// de virada (`unrolled_wins_small_n_loop_wins_large_n_same_damage`,
+/// `script/vm.rs`) pela prova via VM real, não só a conta em texto.
+/// Unidade é `Stmt`, nunca caractere/token (não-objetivo 3 da RFC) —
+/// comentário e linha vazia não são `Stmt`, não custam nada.
+pub const STMT_SIZE_COST: u32 = 2;
+
 /// Custo em ciclos de invocar uma função definida pelo jogador (RFC-006,
 /// regra 9). Cobrado *antes* de executar o corpo, somado ao custo das
 /// instruções do corpo — `combo()` chamado 3 vezes custa 3 vezes o corpo

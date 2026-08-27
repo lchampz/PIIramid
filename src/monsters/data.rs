@@ -10,6 +10,20 @@ use super::{Element, MonsterSpec, Weakness};
 /// o elemento certo, longe da faixa `3..=6`. `cycle_budget` cai para 6 (so
 /// 3 ataques por turno); `max_life` continua 100. Calibrado e provado por
 /// `mummy_rhythm_within_target_range` (`src/script/vm.rs`).
+///
+/// RFC-024: todo script agora tambem paga `STMT_SIZE_COST` por `Stmt`
+/// escrito, uma vez por turno, alem do custo de execucao -- o orcamento
+/// precisa subir na mesma medida pra nao mudar o resultado da calibracao
+/// da RFC-022 (regra 2 da RFC-024: "orcamento sobe, vida nao muda", mesmo
+/// padrao que a RFC-021/022 ja usaram). Script de referencia (3x
+/// `atacar()`) tem 3 `Stmt` -> +6 de tamanho (6 -> 12 seria o minimo
+/// exato). Fechado em 16 em vez de 12: `reference_invoke_script_fits_
+/// every_current_monster_budget` (`src/script/vm.rs`) exige que o script de
+/// exemplo da RFC-004 (2 invocacoes + 1 atacar, 16 ciclos no orcamento
+/// principal) caiba ate no menor orcamento do bestiario -- Mumia continua
+/// sendo esse piso. Os 4 ciclos extra viram golpe bonus no script de 3
+/// ataques (36+4=40 dano/turno), o suficiente pra ainda fechar em 3 turnos
+/// (dentro de `3..=6`, sem mudar o turno-alvo).
 pub fn mummy() -> MonsterSpec {
     MonsterSpec {
         title: "Mumia",
@@ -19,7 +33,7 @@ pub fn mummy() -> MonsterSpec {
             "apesar das mariposas acharem suas ataduras apetitosas, seu maior medo e o fogo.",
         ],
         max_life: 100,
-        cycle_budget: 6,
+        cycle_budget: 16,
         weakness: Weakness::Elemento(Element::Fogo),
         base_damage: 8,
         attack_name: "Atadura Viva",
@@ -80,6 +94,10 @@ pub fn zombie() -> MonsterSpec {
 /// correto). `max_life` sobe de 110 para 135 pra fechar o turno-alvo com
 /// esse orcamento. Calibrado e provado por
 /// `beetle_rhythm_within_target_range` (`src/script/vm.rs`).
+///
+/// RFC-024: script de referencia (`if` + 5x `atacar()`) tem 6 `Stmt` -> +12
+/// de tamanho (par, preserva a paridade impar do orcamento); `cycle_budget`
+/// sobe de 11 para 23 (regra 2 da RFC-024: orcamento sobe, vida nao muda).
 pub fn beetle() -> MonsterSpec {
     MonsterSpec {
         title: "Escaravelho",
@@ -89,7 +107,7 @@ pub fn beetle() -> MonsterSpec {
             "So toma dano de verdade se voce ler a postura e reagir a ela.",
         ],
         max_life: 135,
-        cycle_budget: 11,
+        cycle_budget: 23,
         weakness: Weakness::ExigeGuarda,
         base_damage: 7,
         attack_name: "Investida da Carapaca",
@@ -104,6 +122,9 @@ pub fn beetle() -> MonsterSpec {
 /// `inspecionar()`(3) + 3x `atacar()`(2 cada) = 9, sem sobra); `max_life`
 /// continua 140. Calibrado e provado por `sphinx_rhythm_within_target_range`
 /// (`src/script/vm.rs`).
+///
+/// RFC-024: script de referencia (`inspecionar()` + 3x `atacar()`) tem 4
+/// `Stmt` -> +8 de tamanho; `cycle_budget` sobe de 9 para 17.
 pub fn sphinx() -> MonsterSpec {
     MonsterSpec {
         title: "Esfinge",
@@ -113,7 +134,7 @@ pub fn sphinx() -> MonsterSpec {
             "Inspecione antes de atacar, ou nenhum golpe vai valer nada.",
         ],
         max_life: 140,
-        cycle_budget: 9,
+        cycle_budget: 17,
         weakness: Weakness::RequerInspecao,
         base_damage: 10,
         attack_name: "Enigma Cortante",
@@ -136,6 +157,10 @@ pub fn sphinx() -> MonsterSpec {
 /// `max_life` continua 150, sem alteracao -- o orcamento maior sozinho ja
 /// fecha o turno-alvo. Calibrado e provado por
 /// `guardiao_rhythm_within_target_range` (`src/script/vm.rs`).
+///
+/// RFC-024: script de referencia (`inspecionar()`, `if` com 4x `atacar()`
+/// e `esperar()` no `else`) tem 7 `Stmt`, custo de tamanho +14;
+/// `cycle_budget` sobe de 12 para 26.
 pub fn guardiao() -> MonsterSpec {
     MonsterSpec {
         title: "Aker",
@@ -145,7 +170,7 @@ pub fn guardiao() -> MonsterSpec {
             "So abre as duas ao mesmo tempo - nunca uma antes da outra.",
         ],
         max_life: 150,
-        cycle_budget: 12,
+        cycle_budget: 26,
         weakness: Weakness::DuploSelo,
         base_damage: 9,
         attack_name: "Mordida do Horizonte",
@@ -167,6 +192,10 @@ pub fn guardiao() -> MonsterSpec {
 /// total, orcamento 9 exato) fecha em 5 turnos com vida 160 -- orcamento
 /// caiu de 16 para 9 e vida subiu de 150 para 160. Calibrado e provado por
 /// `sentinela_rhythm_within_target_range` (`src/script/vm.rs`).
+///
+/// RFC-024: script de referencia (`FuncDef` com 1 `Stmt` no corpo + 3
+/// chamadas) tem 5 `Stmt` -> +10 de tamanho; `cycle_budget` sobe de 9
+/// para 19.
 pub fn sentinela() -> MonsterSpec {
     MonsterSpec {
         title: "Apagado",
@@ -176,7 +205,7 @@ pub fn sentinela() -> MonsterSpec {
             "Para ele, o que nao tem nome nunca aconteceu de verdade.",
         ],
         max_life: 160,
-        cycle_budget: 9,
+        cycle_budget: 19,
         weakness: Weakness::ExigeNomeacao,
         base_damage: 8,
         attack_name: "Traco Riscado",
@@ -199,6 +228,10 @@ pub fn sentinela() -> MonsterSpec {
 /// 8 exato, dano cheio fecha em 6 turnos com vida 140. Orcamento caiu de 12
 /// para 8 e vida caiu de 150 para 140. Calibrado e provado por
 /// `necroguardiao_rhythm_within_target_range` (`src/script/vm.rs`).
+///
+/// RFC-024: script de referencia (2x `invocar` de 2 `Stmt` cada + 2x
+/// `atacar()`) tem 6 `Stmt` -> +12 de tamanho; `cycle_budget` sobe de 8
+/// para 20.
 pub fn necroguardiao() -> MonsterSpec {
     MonsterSpec {
         title: "Chabti-Mor",
@@ -208,7 +241,7 @@ pub fn necroguardiao() -> MonsterSpec {
             "So golpeia de verdade depois de chamar reforcos duas vezes.",
         ],
         max_life: 140,
-        cycle_budget: 8,
+        cycle_budget: 20,
         weakness: Weakness::ExigeInvocacaoDupla,
         base_damage: 9,
         attack_name: "Punho Sem Pratica",

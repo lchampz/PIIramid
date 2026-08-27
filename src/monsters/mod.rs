@@ -4,6 +4,7 @@
 
 pub mod data;
 
+use crate::inventory::Item as DropItem;
 use crate::world::entity::Kind;
 
 /// RFC-005 regra 1: registro central e único da ordem dos 7 monstros/fases
@@ -137,6 +138,11 @@ pub struct MonsterSpec {
     /// nome de sabor do ataque normal e do golpe especial (carga cheia)
     pub attack_name: &'static str,
     pub special_attack_name: &'static str,
+    /// RFC-028: item real (RFC-002) que este monstro deixa cair ao ser
+    /// vencido — sempre o mesmo item, sem sorteio (regra 1/não-objetivo 1
+    /// da RFC). Inserido em `SaveData::bag` só no braço `Won` de
+    /// `PhaseScene::update` (`scenes/phase.rs`), nunca em derrota/fuga.
+    pub drop: DropItem,
 }
 
 /// RFC-027: `Clone`/`PartialEq` existem só para o Ensaio Geral — clonar um

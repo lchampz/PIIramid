@@ -107,10 +107,18 @@ pub struct MenuScene {
     /// esse mesmo input, que continua sendo processado normalmente no
     /// resto de `update()`.
     entry_skipped: bool,
+    /// RFC-028, regra 4: texto de feedback do despojo de vitória
+    /// (`inventory::apply_phase_victory_drop`), recebido via
+    /// `Transition::GoToMenu` só quando a fase que acabou de terminar foi
+    /// uma vitória real — `None` em qualquer outro caminho até o menu
+    /// (derrota, fuga, VOLTAR do Grimório/Guia de Estilo, ESC do menu de
+    /// pausa). Não é persistido em `SaveData`: é só o texto de uma única
+    /// tela, no mesmo espírito efêmero do `log` de `DuelScene`.
+    last_drop: Option<String>,
 }
 
 impl MenuScene {
-    pub fn new(_assets: &Assets) -> Self {
+    pub fn new(_assets: &Assets, last_drop: Option<String>) -> Self {
         let save = SaveData::load();
         let next_room = PHASES.get(save.current_phase).map(|(_, spec_fn)| spec_fn().room);
         MenuScene {
@@ -119,6 +127,7 @@ impl MenuScene {
             next_room,
             opened_at: get_time(),
             entry_skipped: false,
+            last_drop,
         }
     }
 
@@ -281,6 +290,15 @@ impl MenuScene {
                     TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() },
                 );
             }
+        }
+
+        // RFC-028, regra 4: feedback do despojo recebido ao vencer a fase
+        // anterior -- só aparece quando `Transition::GoToMenu` chegou com
+        // `last_drop: Some(..)` (vitória real), uma linha a mais logo
+        // abaixo do "PROGRESSO", sem tela nova.
+        if let Some(drop) = &self.last_drop {
+            y += 24.0;
+            draw_text_ex(drop, 60.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() });
         }
 
         let items = Self::items();

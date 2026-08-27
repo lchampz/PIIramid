@@ -26,8 +26,17 @@ pub enum Transition {
     /// `GoToPhase { save }` ao terminar ou ser pulada (regra 7), com o
     /// mesmo `save`, intacto.
     GoToIntro { save: Box<crate::inventory::SaveData> },
-    GoToGameOver { won: bool, turns: u32, player_hp: i32 },
-    GoToMenu,
+    /// RFC-028, regra 4: `last_drop` carrega o texto de feedback do
+    /// despojo de vitória (`inventory::apply_phase_victory_drop`), no
+    /// mesmo espírito de `won`/`turns`/`player_hp` já cruzarem a fronteira
+    /// de cena por aqui — `None` em toda derrota/fuga e em todo caminho que
+    /// não passa por `PhaseScene` (mapa livre de debug, telas sem duelo).
+    GoToGameOver { won: bool, turns: u32, player_hp: i32, last_drop: Option<String> },
+    /// RFC-028, regra 4: mesma ideia acima — vitória parcial de fase volta
+    /// direto ao menu (`PhaseScene::update`), então é aqui, não em
+    /// `GoToGameOver`, que o feedback do despojo intermediário precisa
+    /// viajar. `None` em toda transição que não vem de uma vitória de fase.
+    GoToMenu { last_drop: Option<String> },
     GoToGrimoire,
     GoToStyleGuide,
     Quit,

@@ -104,6 +104,21 @@ impl Loadout {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Bag(pub Vec<(Item, u32)>);
 
+impl Bag {
+    /// Insere `qty` unidades de `item` — soma na entrada existente
+    /// (mesmo `id`) em vez de duplicar a linha, mesmo comportamento que
+    /// `GrimoireScene::return_to_bag` (`scenes/grimoire.rs`) já usa ao
+    /// devolver um item desequipado. RFC-028, regra 2: é o ponto único
+    /// que `PhaseScene::update` chama para inserir o despojo de vitória.
+    pub fn add(&mut self, item: Item, qty: u32) {
+        if let Some(entry) = self.0.iter_mut().find(|(it, _)| it.id == item.id) {
+            entry.1 += qty;
+        } else {
+            self.0.push((item, qty));
+        }
+    }
+}
+
 /// Classe do jogador (RFC-003 §1). Não restringe equipamento (não-objetivo
 /// 1 da RFC) — só decide qual `ItemKind` recebe `CLASS_BONUS_DAMAGE`
 /// (`script/api.rs`) quando usado em `atacar()` (`resolve_attack`,
@@ -209,6 +224,19 @@ pub fn recovered_player_life(current: i32, max: i32) -> i32 {
     let missing = (max - current).max(0);
     let recovered = missing * PLAYER_LIFE_RECOVERY_NUM / PLAYER_LIFE_RECOVERY_DEN;
     (current + recovered).min(max)
+}
+
+/// RFC-028, regra 2/4: aplica o despojo de vitória de fase — insere
+/// `drop` (o item temático do `MonsterSpec` vencido, `monsters/data.rs`)
+/// na `Bag` do save e devolve o texto de feedback que a UI mostra (regra
+/// 4). Função pura e testável isoladamente (sem `macroquad`, sem
+/// `PhaseScene`) — o único chamador é `PhaseScene::update`, braço
+/// `Some(DuelOutcome::Won)`, antes de `self.save.save()`; derrota e fuga
+/// nunca chamam esta função (regra 5/critério de aceite: só vitória real
+/// dropa algo).
+pub fn apply_phase_victory_drop(save: &mut SaveData, drop: &Item) -> String {
+    save.bag.add(drop.clone(), 1);
+    format!("Despojo recebido: {} ({} +{})", drop.name, drop.kind.label(), drop.bonus_damage)
 }
 
 const SAVE_FILE_NAME: &str = "piiramid_save.json";
@@ -404,6 +432,71 @@ mod tests {
         assert!(recovered_player_life(10, 100) > 10, "recuperacao parcial precisa recuperar alguma vida");
         assert_eq!(recovered_player_life(100, 100), 100, "vida cheia nao pode overhealar acima do maximo");
         assert_eq!(recovered_player_life(0, 100), 90, "90% de recuperacao sobre 100 de vida perdida");
+    }
+
+    #[test]
+    fn bag_add_stacks_on_matching_id_instead_of_duplicating_the_row() {
+        let mut bag = Bag::default();
+        let item = Item { id: "seiva_de_lotus".into(), kind: ItemKind::Pocao, name: "vida".into(), bonus_damage: 0 };
+        bag.add(item.clone(), 1);
+        bag.add(item, 2);
+        assert_eq!(bag.0.len(), 1, "mesmo id nao pode virar duas linhas na mochila");
+        assert_eq!(bag.0[0].1, 3);
+    }
+
+    #[test]
+    fn bag_add_pushes_a_new_row_for_a_previously_unseen_id() {
+        let mut bag = Bag::default();
+        bag.add(Item { id: "a".into(), kind: ItemKind::Espada, name: "x".into(), bonus_damage: 1 }, 1);
+        bag.add(Item { id: "b".into(), kind: ItemKind::Escudo, name: "y".into(), bonus_damage: 1 }, 1);
+        assert_eq!(bag.0.len(), 2);
+    }
+
+    /// RFC-028, critério de aceite: vencer cada um dos 7 monstros insere o
+    /// item temático correspondente na `Bag` do save -- teste parametrizado
+    /// sobre `monsters::PHASES` (RFC-005), não só leitura de código.
+    #[test]
+    fn winning_each_of_the_seven_monsters_drops_its_thematic_item_into_the_bag() {
+        for (_, spec_fn) in crate::monsters::PHASES {
+            let spec = spec_fn();
+            let mut save = SaveData::default();
+            assert!(save.bag.0.is_empty(), "save novo comeca sem nenhum despojo");
+
+            let label = apply_phase_victory_drop(&mut save, &spec.drop);
+
+            assert_eq!(save.bag.0.len(), 1, "monstro {} deveria inserir exatamente 1 entrada nova na Bag", spec.title);
+            assert_eq!(save.bag.0[0].0, spec.drop, "item inserido precisa ser exatamente o item da tabela de drop de {}", spec.title);
+            assert_eq!(save.bag.0[0].1, 1);
+            assert!(label.contains(&spec.drop.name), "feedback de vitoria precisa citar o nome do item recebido");
+        }
+    }
+
+    /// RFC-028, regra 1/não-objetivo 1: nada de sorteio -- vencer o mesmo
+    /// monstro duas vezes (ex.: repetir a fase) sempre dropa o mesmo item,
+    /// e uma segunda vitória empilha na mesma linha da Bag em vez de gerar
+    /// uma entrada nova.
+    #[test]
+    fn winning_the_same_monster_twice_stacks_the_same_drop_deterministically() {
+        let spec = crate::monsters::data::mummy();
+        let mut save = SaveData::default();
+        apply_phase_victory_drop(&mut save, &spec.drop);
+        apply_phase_victory_drop(&mut save, &spec.drop);
+        assert_eq!(save.bag.0.len(), 1);
+        assert_eq!(save.bag.0[0].1, 2);
+    }
+
+    /// Guarda contra copiar/colar um `id` de outro monstro na tabela de
+    /// drop -- cada uma das 7 entradas precisa ter identidade própria,
+    /// senão duas vitórias diferentes empilhariam na mesma linha da Bag
+    /// por acidente.
+    #[test]
+    fn drop_ids_are_all_distinct_across_the_bestiary() {
+        let ids: Vec<String> = crate::monsters::PHASES.iter().map(|(_, spec_fn)| spec_fn().drop.id).collect();
+        let mut seen = std::collections::HashSet::new();
+        for id in &ids {
+            assert!(seen.insert(id.as_str()), "id de drop duplicado no bestiario: {id}");
+        }
+        assert_eq!(seen.len(), 7);
     }
 
     #[test]

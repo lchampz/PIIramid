@@ -23,7 +23,7 @@ use crate::world::entity::{Entity, Kind};
 /// `Transition::GoToGameOver { won: true, .. }` no primeiro `update()`, sem
 /// duelo nenhum de fato acontecer.
 enum Inner {
-    Active { player: Entity, foe_kind: Kind, monster: MonsterState, duel: Box<DuelScene> },
+    Active { player: Entity, foe_kind: Kind, monster: Box<MonsterState>, duel: Box<DuelScene> },
     Complete,
 }
 
@@ -52,7 +52,7 @@ impl PhaseScene {
                 if let Some(life) = save.player_life {
                     player.life_points = life.clamp(1, player.max_life);
                 }
-                Inner::Active { player, foe_kind: *kind, monster: MonsterState::new(spec_fn()), duel: Box::new(DuelScene::new()) }
+                Inner::Active { player, foe_kind: *kind, monster: Box::new(MonsterState::new(spec_fn())), duel: Box::new(DuelScene::new()) }
             }
             None => Inner::Complete,
         };
@@ -61,7 +61,7 @@ impl PhaseScene {
 
     pub fn update(&mut self) -> Option<Transition> {
         match &mut self.inner {
-            Inner::Complete => Some(Transition::GoToGameOver { won: true, turns: 0, player_hp: 0 }),
+            Inner::Complete => Some(Transition::GoToGameOver { won: true, turns: 0, player_hp: 0, last_drop: None }),
             Inner::Active { player, monster, duel, .. } => {
                 let outcome = duel.update(player, monster, &mut self.save);
                 match outcome {
@@ -80,11 +80,18 @@ impl PhaseScene {
                         // próxima fase começar desgastada, mas não sem
                         // chance nenhuma.
                         self.save.player_life = Some(inventory::recovered_player_life(player.life_points, player.max_life));
+                        // RFC-028, regra 2/3: só o braço `Won` insere o
+                        // despojo temático do monstro (`monster.spec.drop`,
+                        // `monsters/data.rs`) na `Bag` — nenhum custo em
+                        // ciclos, é estado de progressão de campanha, no
+                        // mesmo espírito de `player_life` acima. Derrota e
+                        // fuga (braços abaixo) nunca chamam esta função.
+                        let drop_label = inventory::apply_phase_victory_drop(&mut self.save, &monster.spec.drop);
                         self.save.save();
                         if self.save.current_phase >= PHASES.len() {
-                            Some(Transition::GoToGameOver { won: true, turns: duel.turn(), player_hp: player.life_points })
+                            Some(Transition::GoToGameOver { won: true, turns: duel.turn(), player_hp: player.life_points, last_drop: Some(drop_label) })
                         } else {
-                            Some(Transition::GoToMenu)
+                            Some(Transition::GoToMenu { last_drop: Some(drop_label) })
                         }
                     }
                     // regra 5/7: derrota já levava ao GameOver de derrota
@@ -100,7 +107,7 @@ impl PhaseScene {
                     Some(DuelOutcome::Lost) => {
                         self.save.player_life = None;
                         self.save.save();
-                        Some(Transition::GoToGameOver { won: false, turns: duel.turn(), player_hp: player.life_points })
+                        Some(Transition::GoToGameOver { won: false, turns: duel.turn(), player_hp: player.life_points, last_drop: None })
                     }
                     // regra 5 + não-objetivo 5: fugir não perde nem avança
                     // progresso — salva (current_phase intocado) e volta ao
@@ -114,7 +121,7 @@ impl PhaseScene {
                     Some(DuelOutcome::Fled) => {
                         self.save.player_life = Some(player.life_points.max(1));
                         self.save.save();
-                        Some(Transition::GoToMenu)
+                        Some(Transition::GoToMenu { last_drop: None })
                     }
                     None => None,
                 }

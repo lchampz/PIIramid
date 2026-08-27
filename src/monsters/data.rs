@@ -2,7 +2,23 @@
 //! jogo em C (`consts.h`), só que agora explicam a fraqueza *algorítmica*
 //! em vez da fraqueza aritmética.
 
+use crate::inventory::Item;
+use crate::script::value::ItemKind;
+
 use super::{Element, MonsterSpec, Weakness};
+
+// RFC-028: tabela de drops, uma entrada por monstro (campo `drop` de cada
+// `MonsterSpec` abaixo), sempre o mesmo item (regra 1/não-objetivo 1 — sem
+// sorteio). Cada `id` é único no bestiário (garantido por
+// `drop_ids_are_all_distinct`, `src/inventory.rs`) e o `name` dobra como
+// identificador de pseudo-código (`espada.Nomeado`, `magia.Fogo`) — mesmo
+// padrão que os itens de exemplo de `inventory.rs` já usam. A direção
+// escolhida (RFC-028, regra 1) é "recompensa temática": cada item reflete o
+// próprio monstro que caiu, não necessariamente uma ferramenta contra o
+// próximo — a Múmia é o único caso em que os dois coincidem (ela já sugere
+// isso no texto da RFC): sua fraqueza é fogo, e o item que ela derruba é
+// magia de fogo de verdade, utilizável contra qualquer fraqueza
+// `Elemento(Fogo)` futura.
 
 /// RFC-022: primeiro monstro da progressao (RFC-005), turno-alvo 3. O
 /// orcamento de 20 originais sobrava demais -- 10x `atacar()` cabiam no
@@ -38,6 +54,7 @@ pub fn mummy() -> MonsterSpec {
         base_damage: 8,
         attack_name: "Atadura Viva",
         special_attack_name: "Maldicao do Escaravelho",
+        drop: Item { id: "brasa_da_mumia".into(), kind: ItemKind::Magia, name: "fogo".into(), bonus_damage: 6 },
     }
 }
 
@@ -72,6 +89,7 @@ pub fn zombie() -> MonsterSpec {
         base_damage: 6,
         attack_name: "Mordida Podre",
         special_attack_name: "Enxame Cadaverico",
+        drop: Item { id: "cutelo_cadaverico".into(), kind: ItemKind::Espada, name: "podre".into(), bonus_damage: 5 },
     }
 }
 
@@ -112,6 +130,7 @@ pub fn beetle() -> MonsterSpec {
         base_damage: 7,
         attack_name: "Investida da Carapaca",
         special_attack_name: "Turbilhao de Areia",
+        drop: Item { id: "casco_de_escaravelho".into(), kind: ItemKind::Escudo, name: "carapaca".into(), bonus_damage: 4 },
     }
 }
 
@@ -139,6 +158,7 @@ pub fn sphinx() -> MonsterSpec {
         base_damage: 10,
         attack_name: "Enigma Cortante",
         special_attack_name: "Julgamento da Esfinge",
+        drop: Item { id: "elixir_do_enigma".into(), kind: ItemKind::Pocao, name: "enigma".into(), bonus_damage: 6 },
     }
 }
 
@@ -175,6 +195,7 @@ pub fn guardiao() -> MonsterSpec {
         base_damage: 9,
         attack_name: "Mordida do Horizonte",
         special_attack_name: "Selo dos Dois Sois",
+        drop: Item { id: "chama_do_horizonte".into(), kind: ItemKind::Magia, name: "horizonte".into(), bonus_damage: 7 },
     }
 }
 
@@ -210,6 +231,7 @@ pub fn sentinela() -> MonsterSpec {
         base_damage: 8,
         attack_name: "Traco Riscado",
         special_attack_name: "Veredito do Nome Verdadeiro",
+        drop: Item { id: "traco_do_escriba".into(), kind: ItemKind::Espada, name: "nomeado".into(), bonus_damage: 7 },
     }
 }
 
@@ -246,5 +268,6 @@ pub fn necroguardiao() -> MonsterSpec {
         base_damage: 9,
         attack_name: "Punho Sem Pratica",
         special_attack_name: "Chamado dos Tres Chabtis",
+        drop: Item { id: "vinho_dos_chabtis".into(), kind: ItemKind::Pocao, name: "chabti".into(), bonus_damage: 9 },
     }
 }

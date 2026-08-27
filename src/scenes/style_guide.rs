@@ -23,7 +23,7 @@ impl StyleGuideScene {
         let mouse: Vec2 = mouse_position().into();
         self.btn_back.update_hover(mouse);
         if self.btn_back.clicked(mouse) || is_key_pressed(KeyCode::Escape) {
-            return Some(Transition::GoToMenu);
+            return Some(Transition::GoToMenu { last_drop: None });
         }
         None
     }

@@ -59,7 +59,7 @@ impl GrimoireScene {
             // inventário" (critério de aceite) valer também pra quem só
             // visitou o Grimório sem entrar em duelo.
             self.save.save();
-            return Some(Transition::GoToMenu);
+            return Some(Transition::GoToMenu { last_drop: None });
         }
         None
     }
@@ -230,7 +230,7 @@ impl GrimoireScene {
         y += 20.0;
         if self.save.bag.0.is_empty() {
             draw_text_ex(
-                "Vazia. Sem sistema de loot nesta RFC -- edite o save pra testar.",
+                "Vazia por enquanto -- vencer um duelo derruba o despojo do monstro aqui (RFC-028).",
                 x,
                 y + 20.0,
                 TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::AREIA_ESCURA, ..Default::default() },

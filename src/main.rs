@@ -54,7 +54,7 @@ fn window_conf() -> Conf {
 async fn main() {
     let assets = Assets::load().await;
 
-    let mut scene = Scene::Menu(MenuScene::new(&assets));
+    let mut scene = Scene::Menu(MenuScene::new(&assets, None));
 
     // RFC-019: pausa só existe enquanto `scene` é `Scene::Overworld` (que
     // também cobre o duelo -- `DuelScene` vive dentro de `OverworldScene`,
@@ -93,7 +93,7 @@ async fn main() {
                     paused = false;
                     None
                 }
-                Some(PauseAction::GoToMenu) => Some(Transition::GoToMenu),
+                Some(PauseAction::GoToMenu) => Some(Transition::GoToMenu { last_drop: None }),
                 None => None,
             }
         } else {
@@ -113,8 +113,8 @@ async fn main() {
                 Transition::GoToOverworld { save } => scene = Scene::Overworld(Box::new(OverworldScene::new(*save))),
                 Transition::GoToPhase { save } => scene = Scene::Phase(Box::new(PhaseScene::new(*save))),
                 Transition::GoToIntro { save } => scene = Scene::Intro(IntroScene::new(save)),
-                Transition::GoToGameOver { won, turns, player_hp } => scene = Scene::GameOver(GameOverScene::new(won, turns, player_hp)),
-                Transition::GoToMenu => scene = Scene::Menu(MenuScene::new(&assets)),
+                Transition::GoToGameOver { won, turns, player_hp, last_drop } => scene = Scene::GameOver(GameOverScene::new(won, turns, player_hp, last_drop)),
+                Transition::GoToMenu { last_drop } => scene = Scene::Menu(MenuScene::new(&assets, last_drop)),
                 Transition::GoToGrimoire => scene = Scene::Grimoire(Box::new(GrimoireScene::new())),
                 Transition::GoToStyleGuide => scene = Scene::StyleGuide(StyleGuideScene::new()),
                 Transition::Quit => break,

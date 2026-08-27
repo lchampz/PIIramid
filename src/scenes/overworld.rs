@@ -94,12 +94,12 @@ impl OverworldScene {
                         // ao vencer a expedição) -- nunca só por navegar o
                         // menu.
                         self.save.save();
-                        return Some(Transition::GoToGameOver { won: true, turns: duel.turn(), player_hp: self.player.life_points });
+                        return Some(Transition::GoToGameOver { won: true, turns: duel.turn(), player_hp: self.player.life_points, last_drop: None });
                     }
                 }
                 Some(DuelOutcome::Lost) => {
                     self.save.save();
-                    return Some(Transition::GoToGameOver { won: false, turns: duel.turn(), player_hp: self.player.life_points });
+                    return Some(Transition::GoToGameOver { won: false, turns: duel.turn(), player_hp: self.player.life_points, last_drop: None });
                 }
                 Some(DuelOutcome::Fled) => {
                     // Bug de gameplay achado em playtest gravado: fugir não

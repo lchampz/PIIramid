@@ -15,12 +15,18 @@ pub struct GameOverScene {
     won: bool,
     turns: u32,
     player_hp: i32,
+    /// RFC-028, regra 4: só populado quando `won == true` e a vitória veio
+    /// de `PhaseScene` derrotando o 7o monstro — mesmo texto de feedback
+    /// que `MenuScene` mostra nas vitórias parciais, aqui porque a vitória
+    /// final pula o menu e vai direto para `GoToGameOver`
+    /// (`scenes/phase.rs`).
+    last_drop: Option<String>,
     btn_restart: Button,
     btn_menu: Button,
 }
 
 impl GameOverScene {
-    pub fn new(won: bool, turns: u32, player_hp: i32) -> Self {
+    pub fn new(won: bool, turns: u32, player_hp: i32, last_drop: Option<String>) -> Self {
         let card_w = 760.0;
         let card_x = (WIDTH - card_w) / 2.0;
         let buttons_y = HEIGHT / 2.0 + 170.0;
@@ -28,6 +34,7 @@ impl GameOverScene {
             won,
             turns,
             player_hp,
+            last_drop,
             btn_restart: Button::new(
                 if won { "PROXIMA CAMARA" } else { "TENTAR DE NOVO" },
                 vec2(card_x + 40.0, buttons_y),
@@ -61,7 +68,7 @@ impl GameOverScene {
             return Some(Transition::GoToPhase { save: Box::new(SaveData::load()) });
         }
         if self.btn_menu.clicked(mouse) {
-            return Some(Transition::GoToMenu);
+            return Some(Transition::GoToMenu { last_drop: None });
         }
         if is_key_pressed(KeyCode::Escape) {
             return Some(Transition::Quit);
@@ -110,6 +117,14 @@ impl GameOverScene {
         for line in wrap_text(flavor, 58) {
             draw_text_ex(&line, card_x + 44.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
             y += 24.0;
+        }
+
+        // RFC-028, regra 4: feedback do despojo do último monstro (só
+        // presente em vitórias, ver doc comment de `last_drop`) -- uma
+        // linha extra logo abaixo do texto de sabor, sem competir com a
+        // grade de estatísticas abaixo.
+        if let Some(drop) = &self.last_drop {
+            draw_text_ex(drop, card_x + 44.0, y + 6.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() });
         }
 
         let stats: [(&str, String); 3] = [

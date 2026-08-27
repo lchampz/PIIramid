@@ -7,6 +7,7 @@ use macroquad::prelude::*;
 use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
 use crate::inventory::SaveData;
+use crate::monsters::PHASES;
 use crate::scenes::Transition;
 use crate::ui::theme;
 
@@ -36,7 +37,15 @@ impl MenuAction {
         match self {
             MenuAction::Phase { fresh } => {
                 let save = if fresh { SaveData::default() } else { SaveData::load() };
-                Transition::GoToPhase { save: Box::new(save) }
+                // RFC-023 regra 4: só "Nova Expedicao" (`fresh: true`) passa
+                // pela introducao narrativa antes do primeiro duelo;
+                // "Continuar" mantem o caminho direto para `GoToPhase` --
+                // ninguem deve reler a intro num segundo playthrough.
+                if fresh {
+                    Transition::GoToIntro { save: Box::new(save) }
+                } else {
+                    Transition::GoToPhase { save: Box::new(save) }
+                }
             }
             MenuAction::DebugOverworld => Transition::GoToOverworld { save: Box::new(SaveData::load()) },
             MenuAction::Grimoire => Transition::GoToGrimoire,
@@ -54,11 +63,21 @@ struct MenuItem {
 
 pub struct MenuScene {
     hovered: Option<usize>,
+    /// RFC-026 regra 3: `SaveData::load()` acontece uma única vez aqui, no
+    /// mesmo padrão que `GrimoireScene::new` já paga (`grimoire.rs:44`) —
+    /// não em `update()`/`draw()`, que rodam a cada frame. `next_room` é
+    /// `None` quando `current_phase >= PHASES.len()` (pirâmide concluída);
+    /// a mensagem "PIRAMIDE CONCLUIDA" nasce daqui, não de uma checagem
+    /// espalhada em `draw()`.
+    current_phase: usize,
+    next_room: Option<&'static str>,
 }
 
 impl MenuScene {
     pub fn new(_assets: &Assets) -> Self {
-        MenuScene { hovered: None }
+        let save = SaveData::load();
+        let next_room = PHASES.get(save.current_phase).map(|(_, spec_fn)| spec_fn().room);
+        MenuScene { hovered: None, current_phase: save.current_phase, next_room }
     }
 
     fn items() -> Vec<MenuItem> {
@@ -140,6 +159,37 @@ impl MenuScene {
         for line in wrap_text(desc, 46) {
             draw_text_ex(&line, 60.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::POEIRA, ..Default::default() });
             y += 24.0;
+        }
+
+        // RFC-026 regra 3: linha de status entre a descrição e a lista de
+        // itens -- "PROGRESSO: FASE N/7 - nome da proxima camara", ou
+        // "PIRAMIDE CONCLUIDA" quando não há próxima fase. ESCARAVELHO só
+        // no número da fase (papel de "informação" já consolidado pela
+        // auditoria de identidade visual), o resto em POEIRA como o resto
+        // do texto de apoio desta tela.
+        y += 8.0;
+        draw_text_ex("PROGRESSO: ", 60.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::POEIRA, ..Default::default() });
+        let prefix_dims = measure_text("PROGRESSO: ", Some(&assets.font_body), theme::BODY_MD, 1.0);
+        match self.next_room {
+            Some(room) => {
+                let phase_label = format!("FASE {}/{}", self.current_phase + 1, PHASES.len());
+                draw_text_ex(&phase_label, 60.0 + prefix_dims.width, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::ESCARAVELHO, ..Default::default() });
+                let phase_dims = measure_text(&phase_label, Some(&assets.font_body), theme::BODY_MD, 1.0);
+                draw_text_ex(
+                    format!(" - {room}"),
+                    60.0 + prefix_dims.width + phase_dims.width,
+                    y,
+                    TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::POEIRA, ..Default::default() },
+                );
+            }
+            None => {
+                draw_text_ex(
+                    "PIRAMIDE CONCLUIDA",
+                    60.0 + prefix_dims.width,
+                    y,
+                    TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() },
+                );
+            }
         }
 
         let items = Self::items();

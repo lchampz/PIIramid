@@ -292,6 +292,15 @@ pub struct DuelScene {
     /// `SaveData::scripts`. Fica ao lado de `btn_clear` no mesmo padrão
     /// visual (botão pequeno no topo do editor).
     btn_save_script: Button,
+    /// RFC-026 regra 2: abre a lista de `save.scripts` (mesmo cartão da
+    /// paleta de comandos) para recarregar um script salvo no editor. Fica
+    /// ao lado de `btn_save_script`, no mesmo estilo Ghost.
+    btn_load_script: Button,
+    /// `true` enquanto a lista de scripts salvos está sobreposta à tela —
+    /// bloqueia edição/execução/paleta de comandos igual a `Phase::Executing`
+    /// já bloqueia Executar, sem precisar virar uma variante de `Phase`
+    /// (não é uma fase do turno, é um painel por cima da fase atual).
+    show_load_menu: bool,
     command_cards: Vec<CommandCardState>,
     /// Variáveis do jogador que sobrevivem entre turnos do mesmo duelo
     /// (RFC-010). Vazio ao entrar no duelo e descartado junto com a cena
@@ -316,6 +325,11 @@ impl DuelScene {
             btn_leave: Button::new("FUGIR", vec2(10.0 + EDITOR_W - 20.0 - 100.0, BUTTONS_Y), vec2(100.0, 56.0), ButtonStyle::Secondary, theme::TITLE_SM),
             btn_clear: Button::new("LIMPAR", vec2(EDITOR_W - 90.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
             btn_save_script: Button::new("SALVAR", vec2(EDITOR_W - 90.0 - 86.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
+            // "CARREGAR" tem 2 letras a mais que "SALVAR"/"LIMPAR" — caixa
+            // um pouco mais larga (84 em vez de 78) pro rótulo não estourar
+            // a borda a 12px, mesmo gap de 8px que já separa os outros dois.
+            btn_load_script: Button::new("CARREGAR", vec2(EDITOR_W - 90.0 - 86.0 - 92.0, EDITOR_BOX_Y + 5.0), vec2(84.0, 26.0), ButtonStyle::Ghost, 12),
+            show_load_menu: false,
             command_cards: vec![CommandCardState::default(); COMMANDS.len()],
             player_vars: HashMap::new(),
             // editor começa vazio; `Valid { cycles_used: 0, .. }` é o
@@ -336,15 +350,30 @@ impl DuelScene {
         Rect::new(10.0 + col * (w + 8.0), COMMAND_PANEL_Y + 26.0 + row * (COMMAND_ROW_H + COMMAND_ROW_GAP), w, COMMAND_ROW_H)
     }
 
+    /// RFC-026 regra 2: retângulo do cartão `index` na lista de scripts
+    /// salvos — extraído aqui pra que clique (em `update`) e desenho (em
+    /// `draw_load_overlay`) nunca divirjam, mesmo padrão de `command_rect`
+    /// acima e de `slot_rect` em `grimoire.rs`.
+    fn load_card_rect(index: usize) -> Rect {
+        let x = WIDTH * 0.2;
+        let w = WIDTH * 0.6;
+        let y = 110.0 + index as f32 * 64.0;
+        Rect::new(x, y, w, 56.0)
+    }
+
     pub fn update(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &mut SaveData) -> Option<DuelOutcome> {
         let mouse: Vec2 = mouse_position().into();
         self.btn_execute.update_hover(mouse);
         self.btn_leave.update_hover(mouse);
         self.btn_clear.update_hover(mouse);
         self.btn_save_script.update_hover(mouse);
+        self.btn_load_script.update_hover(mouse);
         // regra 2: Executar fica desabilitado enquanto o turno está sendo
         // reproduzido — a proteção mora no próprio Button, não espalhada.
         self.btn_execute.disabled = matches!(self.phase, Phase::Executing { .. });
+        // RFC-026 regra 2: abrir a lista não faz sentido no meio do replay
+        // do turno (mesmo motivo de Executar acima).
+        self.btn_load_script.disabled = matches!(self.phase, Phase::Executing { .. });
 
         if let Some(hit) = &mut self.hit {
             hit.timer += get_frame_time();
@@ -379,6 +408,34 @@ impl DuelScene {
         }
         if self.btn_save_script.clicked(mouse) {
             self.save_current_script(save);
+        }
+        if self.btn_load_script.clicked(mouse) {
+            if save.scripts.is_empty() {
+                self.log.push(("Nenhum script salvo para carregar.".to_string(), theme::POEIRA));
+            } else {
+                self.show_load_menu = !self.show_load_menu;
+            }
+        }
+
+        // RFC-026 regra 2: enquanto a lista está aberta, ela consome o
+        // clique inteiro (carregar um script ou fechar a lista) e nada mais
+        // do resto de `update()` de `Phase::Writing` roda neste frame —
+        // mesmo raciocínio de "Executar desabilitado durante o replay":
+        // a lista é uma sobreposição modal, não mais um painel entre outros.
+        if self.show_load_menu {
+            if is_key_pressed(KeyCode::Escape) {
+                self.show_load_menu = false;
+            } else if is_mouse_button_pressed(MouseButton::Left) {
+                for (i, script) in save.scripts.iter().enumerate() {
+                    if Self::load_card_rect(i).contains(mouse) {
+                        self.editor.load_text(&script.body);
+                        self.log.push((format!("Script carregado do grimorio: {}", script.name), theme::MUSGO));
+                        self.show_load_menu = false;
+                        break;
+                    }
+                }
+            }
+            return None;
         }
 
         let writing = matches!(self.phase, Phase::Writing | Phase::Error(_));
@@ -428,6 +485,23 @@ impl DuelScene {
                     } else {
                         self.editor.clear();
                         self.phase = Phase::Writing;
+                        // RFC-026 regra 1: o fim de duelo só é informado à
+                        // `PhaseScene` aqui, depois que o replay inteiro do
+                        // turno (log/retrato/dano, um evento por tick acima)
+                        // já tocou — antes, essa checagem rodava a cada
+                        // `update()` incondicional à fase e cortava o
+                        // replay do turno que matava o monstro, porque
+                        // `run_script` já tinha aplicado o resultado da VM
+                        // de forma síncrona antes de qualquer evento ser
+                        // revelado. Nenhuma regra de combate muda — só o
+                        // momento em que a cena comunica o resultado.
+                        if !monster.alive() {
+                            return Some(DuelOutcome::Won);
+                        }
+                        if player.life_points <= 0 {
+                            player.alive = false;
+                            return Some(DuelOutcome::Lost);
+                        }
                     }
                 }
             }
@@ -439,13 +513,6 @@ impl DuelScene {
             }
         }
 
-        if !monster.alive() {
-            return Some(DuelOutcome::Won);
-        }
-        if player.life_points <= 0 {
-            player.alive = false;
-            return Some(DuelOutcome::Lost);
-        }
         None
     }
 
@@ -552,19 +619,39 @@ impl DuelScene {
         }
     }
 
-    pub fn draw(&self, assets: &Assets, player: &Entity, monster: &MonsterState, foe_kind: Kind) {
+    /// `current_phase`: `Some(indice)` na sequência linear de fases
+    /// (RFC-005/RFC-026 regra 3), `None` no mapa livre de debug
+    /// (`OverworldScene`), que não tem noção de "fase da pirâmide".
+    pub fn draw(&self, assets: &Assets, player: &Entity, monster: &MonsterState, foe_kind: Kind, save: &SaveData, current_phase: Option<usize>) {
         clear_background(theme::TUMBA);
-        self.draw_top_bar(assets, monster);
+        self.draw_top_bar(assets, monster, current_phase);
         self.draw_editor_column(assets);
         self.draw_arena(assets, player, monster, foe_kind);
         self.draw_dossier_and_log(assets, monster);
+        if self.show_load_menu {
+            self.draw_load_overlay(assets, save);
+        }
     }
 
-    fn draw_top_bar(&self, assets: &Assets, monster: &MonsterState) {
+    fn draw_top_bar(&self, assets: &Assets, monster: &MonsterState, current_phase: Option<usize>) {
         draw_rectangle(0.0, 0.0, WIDTH, TOP_BAR_H, theme::PEDRA);
         draw_rectangle(0.0, TOP_BAR_H - 3.0, WIDTH, 3.0, theme::OURO);
 
         draw_text_ex(monster.spec.room, 20.0, 30.0, TextParams { font: Some(&assets.font_title), font_size: 13, color: theme::OURO, ..Default::default() });
+        // RFC-026 regra 3: "FASE N/7" ao lado do nome da sala — só quando
+        // esta cena está rodando dentro da progressão linear (`PhaseScene`).
+        // `current_phase` já veio validado (`PHASES.get` não devolveu
+        // `None`), então não precisa tratar "piramide concluida" aqui: esse
+        // caso não chega a montar um `DuelScene` (ver `phase.rs::Inner`).
+        if let Some(phase_index) = current_phase {
+            let room_dims = measure_text(monster.spec.room, Some(&assets.font_title), 13, 1.0);
+            draw_text_ex(
+                format!("FASE {}/{}", phase_index + 1, crate::monsters::PHASES.len()),
+                20.0 + room_dims.width + 14.0,
+                30.0,
+                TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::POEIRA, ..Default::default() },
+            );
+        }
         draw_text_ex(
             format!("TURNO {:02}", self.turn),
             20.0,
@@ -638,6 +725,7 @@ impl DuelScene {
         );
         self.btn_clear.draw(&assets.font_body);
         self.btn_save_script.draw(&assets.font_body);
+        self.btn_load_script.draw(&assets.font_body);
 
         self.draw_code_lines(assets, box_y + 36.0, box_h - 68.0);
 
@@ -748,6 +836,34 @@ impl DuelScene {
                 r.y + 21.0,
                 TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::POEIRA, ..Default::default() },
             );
+        }
+    }
+
+    /// RFC-026 regra 2: lista de `save.scripts` sobreposta à tela inteira,
+    /// aberta pelo botão CARREGAR. Mesmo cartão visual da paleta de
+    /// comandos (`draw_command_palette` acima) — reaproveitado em vez de
+    /// inventar um componente novo, mesmo raciocínio que a RFC pede.
+    fn draw_load_overlay(&self, assets: &Assets, save: &SaveData) {
+        draw_rectangle(0.0, 0.0, WIDTH, HEIGHT, Color::new(0.0, 0.0, 0.0, 0.6));
+
+        draw_text_ex(
+            "CARREGAR SCRIPT - CLIQUE PARA SUBSTITUIR O EDITOR (ESC PARA FECHAR)",
+            WIDTH * 0.2,
+            86.0,
+            TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::PAPIRO, ..Default::default() },
+        );
+
+        for (i, script) in save.scripts.iter().enumerate() {
+            let r = Self::load_card_rect(i);
+            let hovered = r.contains(mouse_position().into());
+            let border = if hovered { theme::POEIRA } else { theme::TIJOLO };
+            draw_rectangle(r.x, r.y, r.w, r.h, theme::PEDRA);
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, border);
+            draw_text_ex(&script.name, r.x + 12.0, r.y + 22.0, TextParams { font: Some(&assets.font_body), font_size: 16, color: theme::ESCARAVELHO, ..Default::default() });
+            let lines = script.body.lines().count();
+            let preview = script.body.lines().next().unwrap_or("");
+            let summary = format!("{lines} linha(s) - {preview}");
+            draw_text_ex(&summary, r.x + 12.0, r.y + 42.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::POEIRA, ..Default::default() });
         }
     }
 

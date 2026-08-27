@@ -17,6 +17,7 @@ use assets::Assets;
 use config::{HEIGHT, NAME, WIDTH};
 use scenes::gameover::GameOverScene;
 use scenes::grimoire::GrimoireScene;
+use scenes::intro::IntroScene;
 use scenes::menu::MenuScene;
 use scenes::overworld::OverworldScene;
 use scenes::phase::PhaseScene;
@@ -32,6 +33,9 @@ enum Scene {
     /// `Overworld` — não há mapa/movimento por baixo pra reaproveitar a
     /// estrutura `duel: Option<(usize, DuelScene)>` de `OverworldScene`.
     Phase(Box<PhaseScene>),
+    /// RFC-023: introdução narrativa, só alcançável por "NOVA EXPEDICAO".
+    /// Fora de propósito do `pauseable` abaixo -- `ESC` já é "pular" aqui.
+    Intro(IntroScene),
     GameOver(GameOverScene),
     Grimoire(Box<GrimoireScene>),
     StyleGuide(StyleGuideScene),
@@ -66,6 +70,10 @@ async fn main() {
         // "funcionando" só para quem entra pelo item de menu de debug, e
         // quebraria silenciosamente para todo mundo que joga o fluxo normal
         // (exatamente o risco que a RFC-005 pede pra não deixar acontecer).
+        // RFC-023: `Scene::Intro` fica fora de propósito -- `ESC` ali já
+        // significa "pular a introdução" (regra 6); se também abrisse o
+        // menu de pausa, a mesma tecla brigaria com duas funções no mesmo
+        // frame (RFC-023, tabela de riscos).
         let pauseable = matches!(scene, Scene::Overworld(_) | Scene::Phase(_));
 
         // RFC-019 regra 2: único lugar que lê `ESC` para pausa -- alterna.
@@ -93,6 +101,7 @@ async fn main() {
                 Scene::Menu(s) => s.update(),
                 Scene::Overworld(s) => s.update(),
                 Scene::Phase(s) => s.update(),
+                Scene::Intro(s) => s.update(),
                 Scene::GameOver(s) => s.update(),
                 Scene::Grimoire(s) => s.update(),
                 Scene::StyleGuide(s) => s.update(),
@@ -103,6 +112,7 @@ async fn main() {
             match t {
                 Transition::GoToOverworld { save } => scene = Scene::Overworld(Box::new(OverworldScene::new(*save))),
                 Transition::GoToPhase { save } => scene = Scene::Phase(Box::new(PhaseScene::new(*save))),
+                Transition::GoToIntro { save } => scene = Scene::Intro(IntroScene::new(save)),
                 Transition::GoToGameOver { won, turns, player_hp } => scene = Scene::GameOver(GameOverScene::new(won, turns, player_hp)),
                 Transition::GoToMenu => scene = Scene::Menu(MenuScene::new(&assets)),
                 Transition::GoToGrimoire => scene = Scene::Grimoire(Box::new(GrimoireScene::new())),
@@ -118,6 +128,7 @@ async fn main() {
             Scene::Menu(s) => s.draw(&assets),
             Scene::Overworld(s) => s.draw(&assets),
             Scene::Phase(s) => s.draw(&assets),
+            Scene::Intro(s) => s.draw(&assets),
             Scene::GameOver(s) => s.draw(&assets),
             Scene::Grimoire(s) => s.draw(&assets),
             Scene::StyleGuide(s) => s.draw(&assets),

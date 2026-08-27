@@ -1,6 +1,7 @@
 pub mod duel;
 pub mod gameover;
 pub mod grimoire;
+pub mod intro;
 pub mod menu;
 pub mod overworld;
 pub mod phase;
@@ -19,6 +20,12 @@ pub enum Transition {
     /// mapa/movimento — mesmo padrão de `save` emprestado que `GoToOverworld`
     /// já usa.
     GoToPhase { save: Box<crate::inventory::SaveData> },
+    /// RFC-023 regra 4: só alcançável por "NOVA EXPEDICAO"
+    /// (`MenuAction::Phase { fresh: true }`) — "CONTINUAR" nunca passa por
+    /// aqui, vai direto para `GoToPhase`. A introdução em si dispara
+    /// `GoToPhase { save }` ao terminar ou ser pulada (regra 7), com o
+    /// mesmo `save`, intacto.
+    GoToIntro { save: Box<crate::inventory::SaveData> },
     GoToGameOver { won: bool, turns: u32, player_hp: i32 },
     GoToMenu,
     GoToGrimoire,

@@ -39,6 +39,18 @@ impl CodeEditor {
         self.highlighted_line = None;
     }
 
+    /// RFC-026 regra 2: substitui todo o conteúdo do editor pelo `body` de
+    /// um `SavedScript` carregado — sempre substitui, nunca funde com o que
+    /// já estava no editor (a RFC pede "sem merge/append" explicitamente).
+    /// Cursor vai para o fim do texto carregado, mesmo espírito de abrir um
+    /// arquivo existente num editor de texto comum.
+    pub fn load_text(&mut self, text: &str) {
+        self.lines = if text.is_empty() { vec![String::new()] } else { text.split('\n').map(str::to_string).collect() };
+        self.cursor_row = self.lines.len() - 1;
+        self.cursor_col = self.lines[self.cursor_row].chars().count();
+        self.highlighted_line = None;
+    }
+
     /// Insere um trecho de texto (pode ter múltiplas linhas) na posição do
     /// cursor, como se tivesse sido digitado — usado pela paleta de
     /// comandos clicável para inserir uma chamada pronta.
@@ -228,6 +240,16 @@ mod tests {
         ed.insert_char('}');
         assert_eq!(ed.lines[0], "}");
         assert_eq!(ed.cursor_col, 1);
+    }
+
+    #[test]
+    fn load_text_replaces_content_and_moves_cursor_to_end() {
+        let mut ed = editor();
+        ed.insert_snippet("velho()");
+        ed.load_text("atacar(espada.Fogo)\ndefender(escudo.Bronze)");
+        assert_eq!(ed.lines, vec!["atacar(espada.Fogo)".to_string(), "defender(escudo.Bronze)".to_string()]);
+        assert_eq!(ed.cursor_row, 1);
+        assert_eq!(ed.cursor_col, "defender(escudo.Bronze)".len());
     }
 
     #[test]

@@ -166,7 +166,9 @@ impl OverworldScene {
         self.map.draw(&assets.tile_floor, &assets.tile_wall);
 
         if let Some((idx, duel)) = &self.duel {
-            duel.draw(assets, &self.player, &self.foes[*idx].state, self.foes[*idx].entity.kind);
+            // `OverworldScene` (mapa livre de debug) não tem noção de fase
+            // linear da pirâmide — `None` faz `DuelScene` omitir "FASE N/7".
+            duel.draw(assets, &self.player, &self.foes[*idx].state, self.foes[*idx].entity.kind, &self.save, None);
             return;
         }
 

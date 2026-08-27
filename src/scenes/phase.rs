@@ -138,7 +138,9 @@ impl PhaseScene {
                     TextParams { font: Some(&assets.font_title), font_size: theme::TITLE_MD, color: theme::OURO, ..Default::default() },
                 );
             }
-            Inner::Active { player, foe_kind, monster, duel } => duel.draw(assets, player, monster, *foe_kind),
+            Inner::Active { player, foe_kind, monster, duel } => {
+                duel.draw(assets, player, monster, *foe_kind, &self.save, Some(self.save.current_phase))
+            }
         }
     }
 }

@@ -174,6 +174,41 @@ pub struct SaveData {
     /// significa "todas as fases vencidas" — vitória completa da pirâmide.
     #[serde(default)]
     pub current_phase: usize,
+    /// Vida do jogador persistida entre fases (RFC-025, regra 5) — antes
+    /// desta RFC, `PhaseScene::new` (`scenes/phase.rs`) recriava o jogador
+    /// com vida cheia a cada fase (causa 2 de
+    /// `ANALISE-por-que-o-jogo-e-facil.md`), zerando qualquer risco
+    /// acumulado da campanha. `None` = vida cheia — mesmo valor tanto para
+    /// um save gravado antes desta RFC (sem esta chave no JSON) quanto
+    /// para o começo de uma expedição nova, `#[serde(default)]` no mesmo
+    /// padrão de `player_class`/`current_phase` acima.
+    #[serde(default)]
+    pub player_life: Option<i32>,
+}
+
+/// RFC-025 regra 6: fração da vida perdida que o jogador recupera ao
+/// vencer uma fase — não é cura total (isso zeraria o desgaste que esta
+/// RFC inteira existe para criar) nem é recuperação zero (isso tornaria a
+/// campanha de 7 fases praticamente impossível de terminar viva, morte por
+/// acumulação aritmética pura, o que a RFC explicitamente não quer:
+/// "a intenção é desgaste, não morte inevitável"). Calibrado pelos dois
+/// testes de campanha permanentes de `script::vm::tests`
+/// (`campanha_bem_jogada_sobrevive`/`campanha_mal_jogada_morre`, RFC-025
+/// regra 8) — 90% é a fração medida que deixa a campanha bem jogada
+/// terminar com margem real (14 de 100 de vida no 7º monstro), sem
+/// eliminar o risco: a campanha mal jogada morre já na 1ª fase, mesmo com
+/// a mesma recuperação entre fases (não dá tempo de a fração importar).
+pub const PLAYER_LIFE_RECOVERY_NUM: i32 = 9;
+pub const PLAYER_LIFE_RECOVERY_DEN: i32 = 10;
+
+/// Aplica a recuperação parcial (regra 6) sobre a vida com que o jogador
+/// terminou a fase que acabou de vencer. Nunca ultrapassa `max` (sem
+/// overheal) nem produz um valor menor que `current` (a fórmula só
+/// recupera vida perdida, nunca subtrai).
+pub fn recovered_player_life(current: i32, max: i32) -> i32 {
+    let missing = (max - current).max(0);
+    let recovered = missing * PLAYER_LIFE_RECOVERY_NUM / PLAYER_LIFE_RECOVERY_DEN;
+    (current + recovered).min(max)
 }
 
 const SAVE_FILE_NAME: &str = "piiramid_save.json";
@@ -236,6 +271,7 @@ mod tests {
             scripts: vec![SavedScript { name: "abre-fogo.pii".into(), body: "atacar(magia.Fogo)\ndefender(escudo.Bronze)".into() }],
             player_class: None,
             current_phase: 0,
+            player_life: None,
         }
     }
 
@@ -331,6 +367,43 @@ mod tests {
         let back: SaveData = serde_json::from_str(&json).expect("desserializar SaveData com fase");
         assert_eq!(back.current_phase, 3);
         assert_eq!(data, back);
+    }
+
+    #[test]
+    fn default_save_has_full_life() {
+        assert_eq!(SaveData::default().player_life, None);
+    }
+
+    #[test]
+    fn save_json_without_player_life_field_deserializes_as_none() {
+        // Simula um save gravado antes da RFC-025: o JSON nao tem a chave
+        // "player_life" -- #[serde(default)] precisa cobrir esse caso sem
+        // falhar (regra 5 da RFC-025), mesmo padrao de current_phase acima.
+        let json = r#"{"loadout":{"arma":null,"magia":null,"escudo":null,"pocao":null},"bag":[],"scripts":[],"player_class":null,"current_phase":2}"#;
+        let loaded: SaveData = serde_json::from_str(json).expect("save antigo sem player_life deve desserializar");
+        assert_eq!(loaded.player_life, None);
+    }
+
+    #[test]
+    fn save_data_with_player_life_round_trips() {
+        let mut data = sample();
+        data.player_life = Some(42);
+        let json = serde_json::to_string(&data).expect("serializar SaveData com vida");
+        let back: SaveData = serde_json::from_str(&json).expect("desserializar SaveData com vida");
+        assert_eq!(back.player_life, Some(42));
+        assert_eq!(data, back);
+    }
+
+    #[test]
+    fn recovered_player_life_is_partial_never_full_never_less_than_current() {
+        // RFC-025 regra 6: recupera uma fracao da vida perdida, nunca cura
+        // total (senao o desgaste desapareceria) nem recupera menos que
+        // zero (a formula so soma vida perdida, nunca subtrai).
+        assert_eq!(recovered_player_life(10, 100), 10 + (90 * PLAYER_LIFE_RECOVERY_NUM / PLAYER_LIFE_RECOVERY_DEN));
+        assert!(recovered_player_life(10, 100) < 100, "recuperacao parcial nunca pode ser cura total");
+        assert!(recovered_player_life(10, 100) > 10, "recuperacao parcial precisa recuperar alguma vida");
+        assert_eq!(recovered_player_life(100, 100), 100, "vida cheia nao pode overhealar acima do maximo");
+        assert_eq!(recovered_player_life(0, 100), 90, "90% de recuperacao sobre 100 de vida perdida");
     }
 
     #[test]

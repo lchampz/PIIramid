@@ -28,7 +28,11 @@ pub enum TurnEvent {
     Healed { line: usize, amount: i32 },
     Waited { line: usize },
     BonusStrike { damage: i32 },
-    CounterAttack { damage: i32, blocked: bool, special: bool },
+    /// RFC-025 regra 1: o monstro golpeia **todo turno**, não só quando o
+    /// jogador estoura o orçamento — `truncated` distingue as duas
+    /// origens só para o log/storyteller (a matemática de dano já embute
+    /// a diferença, ver `TRUNCATE_DAMAGE_MULTIPLIER` em `run_turn_with_bag`).
+    CounterAttack { damage: i32, blocked: bool, special: bool, truncated: bool },
     Truncated { line: usize },
     /// `selecionar()` (RFC-015, regra 10): `examined` é quantos itens da
     /// mochila foram varridos até parar (achou ou esgotou a mochila) —
@@ -400,23 +404,37 @@ pub fn run_turn_with_bag(
         Err(Signal::Error(e)) => return Err(e),
     };
 
-    if truncated {
-        let blocked = vm.shielded.is_some();
-        let base = if enemy_special_ready { enemy_base_damage * 5 / 2 } else { enemy_base_damage };
-        let dmg = if blocked { base / 2 } else { base };
-        // RFC-016: reduz o dano bloqueado pelo bônus do item usado em
-        // `defender()` (item/classe, mesma fonte de `resolve_attack` e
-        // `curar`) — piso em 0, nunca vira cura. Sem bloqueio, ou sem
-        // bônus, o comportamento é idêntico ao pré-RFC-016.
-        let dmg = if blocked {
-            let bonus = vm.item_bonus(vm.shielded.as_ref().expect("blocked implica shielded == Some"));
-            (dmg - bonus).max(0)
-        } else {
-            dmg
-        };
-        vm.player_life = (vm.player_life - dmg).max(0);
-        vm.events.push(TurnEvent::CounterAttack { damage: dmg, blocked, special: enemy_special_ready });
+    // RFC-025 regra 1/2/3: o monstro golpeia **todo turno**, não só quando
+    // o jogador estoura o orçamento (causa 1 de
+    // `ANALISE-por-que-o-jogo-e-facil.md` — antes desta RFC, toda perda de
+    // vida do jogador passava só por aqui, dentro do `if truncated`). A
+    // carga decide se esse golpe do turno é o especial (`enemy_special_ready`,
+    // já calculado por `MonsterState::special_ready` antes de chamar
+    // `run_turn_with_bag` — regra 2). Truncar continua sendo estritamente
+    // pior (regra 3): `TRUNCATE_DAMAGE_MULTIPLIER` dobra o dano do turno
+    // *antes* de aplicar `defender()`, então bloquear um turno truncado
+    // ainda dói mais que não bloquear um turno normal, provado pelo teste
+    // `truncating_is_always_strictly_worse_than_not_truncating`.
+    let turn_base = if enemy_special_ready { enemy_base_damage * 5 / 2 } else { enemy_base_damage };
+    let pre_defense = if truncated { turn_base * api::TRUNCATE_DAMAGE_MULTIPLIER } else { turn_base };
+    let blocked = vm.shielded.is_some();
+    let dmg = if blocked { pre_defense / 2 } else { pre_defense };
+    // RFC-016: reduz o dano bloqueado pelo bônus do item usado em
+    // `defender()` (item/classe, mesma fonte de `resolve_attack` e
+    // `curar`) — piso em 0, nunca vira cura. Sem bloqueio, ou sem
+    // bônus, o comportamento é idêntico ao pré-RFC-016 (regra 4: é isso
+    // que faz `defender()` proteger contra o dano do turno, não só o
+    // contra-ataque de truncamento).
+    let dmg = if blocked {
+        let bonus = vm.item_bonus(vm.shielded.as_ref().expect("blocked implica shielded == Some"));
+        (dmg - bonus).max(0)
     } else {
+        dmg
+    };
+    vm.player_life = (vm.player_life - dmg).max(0);
+    vm.events.push(TurnEvent::CounterAttack { damage: dmg, blocked, special: enemy_special_ready, truncated });
+
+    if !truncated {
         let remaining = cycle_budget.saturating_sub(vm.cycles_used);
         // B-006: golpe bonus so existe pra premiar ciclo sobrando de uma
         // acao real. Script vazio (cycles_used == 0) nao executou nenhuma
@@ -1304,8 +1322,11 @@ mod tests {
         let r = run("atacar(magia[\"fogo\"])\n", 20, Weakness::Elemento(Element::Fogo), Posture::Guarda);
         assert!(!r.truncated);
         assert!(matches!(r.events.last(), Some(TurnEvent::BonusStrike { .. })));
-        // sem contra-ataque: vida do jogador intacta
-        assert_eq!(r.player_life, 100);
+        // RFC-025 regra 1: o monstro ataca todo turno agora, mesmo sem
+        // truncar -- vida cheia deixou de ser garantida so por nao errar.
+        // `run()` usa enemy_base_damage=10, sem defender(), sem carga
+        // cheia: dano do turno = 10 cheio.
+        assert_eq!(r.player_life, 100 - 10);
     }
 
     #[test]
@@ -2232,8 +2253,11 @@ mod tests {
         let sem_pocao = run_curar(6, None, None);
         let com_pocao = run_curar(6, Some(&loadout_with_potion("vida", 6)), None);
 
-        assert_eq!(sem_pocao.player_life, 50 + HEAL_AMOUNT, "sem pocao equipada, cura deve ser exatamente HEAL_AMOUNT");
-        assert_eq!(com_pocao.player_life, 50 + HEAL_AMOUNT + 6, "pocao equipada com bonus_damage deve curar mais");
+        // RFC-025 regra 1: `run_curar` nao chama defender(), entao o dano
+        // do turno (enemy_base_damage=10, sem carga cheia) sempre desconta
+        // por cima da cura -- subtrai 10 do que seria so `HEAL_AMOUNT`.
+        assert_eq!(sem_pocao.player_life, 50 + HEAL_AMOUNT - 10, "sem pocao equipada, cura deve ser exatamente HEAL_AMOUNT menos o dano do turno");
+        assert_eq!(com_pocao.player_life, 50 + HEAL_AMOUNT + 6 - 10, "pocao equipada com bonus_damage deve curar mais");
         assert!(com_pocao.player_life > sem_pocao.player_life, "pocao com bonus_damage maior precisa curar mais que sem pocao equipada");
     }
 
@@ -2249,9 +2273,11 @@ mod tests {
 
     #[test]
     fn curar_without_item_or_class_heals_exactly_heal_amount() {
-        // sem loadout e sem classe: mesmo comportamento de antes da RFC-014.
+        // sem loadout e sem classe: mesmo comportamento de antes da RFC-014,
+        // menos o dano do turno que a RFC-025 passou a aplicar sempre (10,
+        // ver `run_curar`).
         let r = run_curar(6, None, None);
-        assert_eq!(r.player_life, 50 + HEAL_AMOUNT, "sem item/classe, curar() deve curar exatamente HEAL_AMOUNT, igual ao comportamento pre-RFC-014");
+        assert_eq!(r.player_life, 50 + HEAL_AMOUNT - 10, "sem item/classe, curar() deve curar exatamente HEAL_AMOUNT, igual ao comportamento pre-RFC-014, menos o dano do turno da RFC-025");
     }
 
     // RFC-016 — bonus de item/classe tambem em defender(): o item usado no
@@ -2297,9 +2323,11 @@ mod tests {
         let r_low = run_defender(7, src, Some(&low));
         let r_high = run_defender(7, src, Some(&high));
 
-        // base bloqueado = 10/2 = 5; bonus subtrai por cima, piso em 0.
-        assert_eq!(counter_damage(&r_low), 5 - 1);
-        assert_eq!(counter_damage(&r_high), 5 - 3);
+        // RFC-025 regra 3: turno truncado dobra o dano antes de aplicar
+        // defender() -- base bloqueada = (10*TRUNCATE_DAMAGE_MULTIPLIER)/2
+        // = 10; bonus subtrai por cima, piso em 0.
+        assert_eq!(counter_damage(&r_low), 10 - 1);
+        assert_eq!(counter_damage(&r_high), 10 - 3);
         assert!(counter_damage(&r_high) < counter_damage(&r_low), "escudo com bonus_damage maior precisa reduzir mais o contra-ataque bloqueado");
     }
 
@@ -2308,7 +2336,9 @@ mod tests {
         // sem loadout equipado: comportamento identico ao pre-RFC-016.
         let src = "defender(escudo.Ouro)\nwhile inimigo.vida > 0:\n    atacar(espada[\"ferro\"])\n";
         let r = run_defender(7, src, None);
-        assert_eq!(counter_damage(&r), 5, "sem item equipado, defender() deve reduzir exatamente 50%, igual ao comportamento pre-RFC-016");
+        // RFC-025: dano pre-defesa dobra por causa do truncamento (10*2=20);
+        // defender() sem bonus continua reduzindo exatamente 50% disso (10).
+        assert_eq!(counter_damage(&r), 10, "sem item equipado, defender() deve reduzir exatamente 50% do dano (ja dobrado pelo truncamento)");
     }
 
     #[test]
@@ -2323,7 +2353,7 @@ mod tests {
         let src = "defender(escudo.Ouro)\ndefender(escudo.Prata)\nwhile inimigo.vida > 0:\n    atacar(espada[\"ferro\"])\n";
         let loadout = loadout_with_shield("ouro", 6);
         let r = run_defender(16, src, Some(&loadout));
-        assert_eq!(counter_damage(&r), 5, "so o ultimo defender() do turno deve contar para o bonus");
+        assert_eq!(counter_damage(&r), 10, "so o ultimo defender() do turno deve contar para o bonus (base 10 = 20 dobrado pelo truncamento, /2 pelo bloqueio)");
     }
 
     // --- RFC-004: invocar (threads de invocacao do necromante) --------
@@ -2356,9 +2386,13 @@ mod tests {
         let r = run(src, budget, Weakness::ExigeGuarda, Posture::Guarda);
 
         assert!(!r.truncated, "duas invocacoes dentro do orcamento principal nao podem truncar o turno");
+        // RFC-025 regra 1: o monstro ataca todo turno agora, truncado ou
+        // nao -- o CounterAttack existe sempre, so `truncated` no evento
+        // muda (aqui, false: o dano nao foi dobrado pela punicao de
+        // truncamento).
         assert!(
-            !r.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { .. })),
-            "sem truncamento do turno principal nao pode haver contra-ataque: {:?}",
+            r.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { truncated: false, .. })),
+            "sem truncamento do turno principal o ataque do monstro ainda acontece, so nao dobrado: {:?}",
             r.events
         );
         // ExigeGuarda com postura em Guarda: os dois ataques sao efetivos,
@@ -2387,9 +2421,13 @@ mod tests {
             "truncamento de invocacao nao pode gerar TurnEvent::Truncated do turno: {:?}",
             r.events
         );
+        // RFC-025 regra 1: o CounterAttack do turno acontece de qualquer
+        // jeito (o monstro ataca todo turno) -- o que o truncamento
+        // *interno* da invocacao nao pode fazer e dobrar esse dano
+        // (`truncated: false` no evento, nao ausencia dele).
         assert!(
-            !r.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { .. })),
-            "truncamento de invocacao nao pode disparar contra-ataque: {:?}",
+            r.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { truncated: false, .. })),
+            "truncamento de invocacao nao pode disparar o contra-ataque *dobrado* do turno: {:?}",
             r.events
         );
         assert!(
@@ -3289,6 +3327,206 @@ mod tests {
                 "N={n}: todo ataque precisa ser efetivo com dano cheio (mesmo elemento em ambos os scripts): {unrolled_hits:?}"
             );
         }
+    }
+
+    // --- RFC-025: risco real e desgaste ---------------------------------
+
+    /// Critério de aceite explícito da regra 3: truncar o orçamento
+    /// precisa ser **sempre** estritamente pior que terminar o script, nas
+    /// quatro combinações que importam (bloqueado por `defender()` ou não,
+    /// carga cheia/especial ou não). Cada par compara um script de 1
+    /// ataque que não trunca contra um `while` infinito que trunca sob a
+    /// mesma condição de bloqueio/especial — só a variável de truncamento
+    /// muda entre os dois.
+    #[test]
+    fn truncating_is_always_strictly_worse_than_not_truncating() {
+        for (defend, special) in [(false, false), (false, true), (true, false), (true, true)] {
+            let prefix = if defend { "defender(escudo.Bronze)\n" } else { "" };
+            let normal_src = format!("{prefix}atacar(espada.Ferro)\n");
+            let trunc_src = format!("{prefix}while inimigo.vida > 0:\n    atacar(espada.Ferro)\n");
+
+            let normal_program = parse(&normal_src).unwrap();
+            let trunc_program = parse(&trunc_src).unwrap();
+
+            // orcamento pequeno o bastante pro while nunca terminar (vida
+            // do inimigo enorme de proposito) mas generoso o bastante pro
+            // script de 1 ataque nunca truncar.
+            let budget = 20;
+            let normal = run_turn(
+                &normal_program,
+                &mut HashMap::new(),
+                budget,
+                100,
+                100,
+                1_000_000,
+                1_000_000,
+                Posture::Guarda,
+                Weakness::ExigeGuarda,
+                10,
+                special,
+            )
+            .unwrap();
+            let trunc = run_turn(
+                &trunc_program,
+                &mut HashMap::new(),
+                budget,
+                100,
+                100,
+                1_000_000,
+                1_000_000,
+                Posture::Guarda,
+                Weakness::ExigeGuarda,
+                10,
+                special,
+            )
+            .unwrap();
+
+            assert!(!normal.truncated, "script de 1 ataque nao pode truncar (defend={defend}, special={special})");
+            assert!(trunc.truncated, "while infinito precisa truncar (defend={defend}, special={special})");
+            assert!(
+                trunc.player_life < normal.player_life,
+                "truncar precisa causar estritamente mais dano que nao truncar (defend={defend}, special={special}): truncado sobrou {} de vida, normal sobrou {}",
+                trunc.player_life,
+                normal.player_life
+            );
+        }
+    }
+
+    /// Simula um duelo completo turno a turno contra o `MonsterSpec` real,
+    /// aplicando a mesma progressão de carga que `MonsterState`
+    /// (`monsters/mod.rs`) usa de verdade — `+CHARGE_PER_TURN` por turno,
+    /// especial quando a carga atinge `CHARGE_THRESHOLD`, carga zera
+    /// depois de um golpe especial acontecer. Para no que vier primeiro: o
+    /// monstro morre (`Some(turnos)`) ou o jogador morre (`None`).
+    /// `player_life` é `&mut`: os dois testes de campanha abaixo encadeiam
+    /// chamadas entre fases para simular a expedição inteira, exatamente
+    /// como `PhaseScene`/`SaveData::player_life` fazem de verdade
+    /// (`scenes/phase.rs`, `inventory.rs`), só que sem depender de save em
+    /// disco.
+    fn simulate_phase(src: &str, spec: &MonsterSpec, toggle_posture: bool, player_life: &mut i32) -> Option<u32> {
+        let mut life = spec.max_life;
+        let mut posture = Posture::Guarda;
+        let mut charge = 0u32;
+        let mut turns = 0u32;
+        while life > 0 && *player_life > 0 && turns < 200 {
+            charge += crate::monsters::CHARGE_PER_TURN;
+            let special_ready = charge >= crate::monsters::CHARGE_THRESHOLD;
+            let program = parse(src).unwrap();
+            let r = run_turn(
+                &program,
+                &mut HashMap::new(),
+                spec.cycle_budget,
+                *player_life,
+                100,
+                life,
+                spec.max_life,
+                posture,
+                spec.weakness,
+                spec.base_damage,
+                special_ready,
+            )
+            .unwrap();
+            life = r.enemy_life;
+            *player_life = r.player_life;
+            if r.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { special: true, .. })) {
+                charge = 0;
+            }
+            if toggle_posture {
+                posture = posture.toggled();
+            }
+            turns += 1;
+        }
+        if *player_life <= 0 {
+            None
+        } else if life <= 0 {
+            Some(turns)
+        } else {
+            // nem o monstro nem o jogador morreram em 200 turnos -- nao
+            // deveria acontecer com nenhum dos scripts usados abaixo
+            // (calibrados pra vencer ou pra travar em RequerInspecao).
+            None
+        }
+    }
+
+    /// RFC-025 regra 8, critério de aceite mais importante da RFC: simula
+    /// as 7 fases em sequência com a mesma estratégia correta de cada
+    /// monstro usada nos testes de ritmo da RFC-022 (`*_rhythm_within_
+    /// target_range` acima), a vida do jogador atravessando as fases com a
+    /// recuperação parcial da regra 6
+    /// (`inventory::recovered_player_life`, 90%), e confirma que o
+    /// jogador chega vivo ao fim. Não usa `curar()` em nenhum script: os 7
+    /// orçamentos calibrados pela RFC-024 não sobram ciclo pra isso na
+    /// maioria dos monstros (ver `RFC-025-entrega-gamedev.md`) — a prova
+    /// de que a campanha é sobrevivível vem só da recuperação entre fases,
+    /// que é exatamente o que este teste calibra.
+    #[test]
+    fn campanha_bem_jogada_sobrevive() {
+        let phases: [(String, MonsterSpec, bool); 7] = [
+            ("atacar(magia.Fogo)\n".repeat(3), data::mummy(), false),
+            ("atacar(espada.Ferro)\n".repeat(3), data::zombie(), false),
+            ("if inimigo.postura == \"guarda\":\n".to_string() + &"    atacar(espada.Bronze)\n".repeat(5), data::beetle(), true),
+            ("inspecionar()\n".to_string() + &"atacar(espada.Bronze)\n".repeat(3), data::sphinx(), false),
+            (
+                "inspecionar()\nif inimigo.postura == \"guarda\":\n".to_string() + &"    atacar(espada.Bronze)\n".repeat(4) + "else:\n    esperar()\n",
+                data::guardiao(),
+                true,
+            ),
+            ("func golpe():\n    atacar(espada.Bronze)\n\n".to_string() + &"golpe()\n".repeat(3), data::sentinela(), false),
+            (
+                "invocar a:\n    esperar()\ninvocar b:\n    esperar()\n".to_string() + &"atacar(espada.Bronze)\n".repeat(2),
+                data::necroguardiao(),
+                false,
+            ),
+        ];
+
+        let mut player_life = 100i32;
+        for (i, (src, spec, toggle_posture)) in phases.iter().enumerate() {
+            // regra 6: recuperacao parcial antes de cada fase (menos a
+            // primeira, onde a vida ja comeca cheia e a formula e no-op).
+            player_life = crate::inventory::recovered_player_life(player_life, 100);
+            let turns = simulate_phase(src, spec, *toggle_posture, &mut player_life);
+            assert!(
+                turns.is_some(),
+                "campanha bem jogada precisa vencer a fase {} ({}) sem o jogador morrer -- vida ficou em {}",
+                i + 1,
+                spec.title,
+                player_life
+            );
+        }
+        assert!(player_life > 0, "campanha bem jogada precisa terminar as 7 fases com o jogador vivo, terminou com {player_life}");
+    }
+
+    /// RFC-025 regra 8, o par do teste acima: joga mal — ignora a fraqueza
+    /// de cada monstro (elemento errado, sem ler postura, sem inspecionar)
+    /// — e confirma que o jogador morre antes de terminar a campanha. Não
+    /// precisa ir muito longe: a Múmia sozinha, atacada com o elemento
+    /// errado, leva 25 turnos pra cair (dano reduzido /8) — e com o
+    /// monstro atacando todo turno (regra 1), 25 turnos de acúmulo já
+    /// bastam pra matar o jogador dentro da primeira fase. É exatamente o
+    /// resultado que prova a tese da RFC: jogar mal agora tem custo real,
+    /// não só "demora mais".
+    #[test]
+    fn campanha_mal_jogada_morre() {
+        let naive_phases: [(String, MonsterSpec, bool); 7] = [
+            ("atacar(magia.Agua)\n".repeat(4), data::mummy(), false),
+            ("atacar(espada.Ferro)\n".repeat(4), data::zombie(), false),
+            ("atacar(espada.Bronze)\n".repeat(5), data::beetle(), true),
+            ("atacar(espada.Bronze)\n".repeat(4), data::sphinx(), false),
+            ("atacar(espada.Bronze)\n".repeat(6), data::guardiao(), true),
+            ("atacar(espada.Bronze)\n".repeat(4), data::sentinela(), false),
+            ("atacar(espada.Bronze)\n".repeat(4), data::necroguardiao(), false),
+        ];
+
+        let mut player_life = 100i32;
+        let mut died = false;
+        for (src, spec, toggle_posture) in naive_phases.iter() {
+            player_life = crate::inventory::recovered_player_life(player_life, 100);
+            if simulate_phase(src, spec, *toggle_posture, &mut player_life).is_none() {
+                died = true;
+                break;
+            }
+        }
+        assert!(died, "campanha mal jogada (ignorando as fraquezas) precisa matar o jogador antes do fim das 7 fases, mas ele chegou vivo");
     }
 }
 

@@ -112,3 +112,16 @@ pub const MAX_INVOCATIONS_PER_TURN: usize = 2;
 /// mas o número de *itens* examinados até o primeiro match depende de onde
 /// na mochila ele está.
 pub const SELECT_SCAN_COST: u32 = 1;
+
+/// RFC-025 regra 3: o quanto o dano do turno é multiplicado *antes* de
+/// `defender()` reduzir, quando o script trunca o orçamento. Estourar o
+/// orçamento não pode nunca ser tão bom quanto (ou melhor que) terminar o
+/// script — com o monstro atacando todo turno (regra 1), "não fazer nada
+/// de errado" já dói; truncar precisa doer estritamente mais. `2` (dobra o
+/// dano) é o valor mais simples que satisfaz isso mesmo bloqueado por
+/// `defender()`: bloquear um turno truncado ainda reduz o dano à metade de
+/// `turn_base * 2`, ou seja, `turn_base` — igual ao dano de um turno
+/// normal *sem* bloqueio, nunca menor. Provado por
+/// `truncating_is_always_strictly_worse_than_not_truncating`
+/// (`script/vm.rs`).
+pub const TRUNCATE_DAMAGE_MULTIPLIER: i32 = 2;

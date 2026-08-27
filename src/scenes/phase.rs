@@ -7,7 +7,7 @@
 use macroquad::prelude::*;
 
 use crate::assets::Assets;
-use crate::inventory::SaveData;
+use crate::inventory::{self, SaveData};
 use crate::monsters::{MonsterState, PHASES};
 use crate::scenes::duel::{DuelOutcome, DuelScene};
 use crate::scenes::Transition;
@@ -41,7 +41,17 @@ impl PhaseScene {
                 // `&Entity` para ler `life_points`/`max_life` (regra 4: sem
                 // Entity/mapa/movimento *de jogo*, mas o tipo em si é
                 // reaproveitado como "o jogador" pro dossiê de vida).
-                let player = Entity::new(Kind::Player, true);
+                let mut player = Entity::new(Kind::Player, true);
+                // RFC-025 regra 5: a vida atravessa as fases -- restaura o
+                // que `save.player_life` guarda (`None` = vida cheia, já é
+                // o que `Entity::new` produz, então não há nada a fazer
+                // nesse caso). Piso em 1 e teto em `max_life`: um save
+                // corrompido/editado a mão que guarde <= 0 não pode nascer
+                // a fase já morto (o jogo não tem um estado de "duelo que
+                // começa perdido").
+                if let Some(life) = save.player_life {
+                    player.life_points = life.clamp(1, player.max_life);
+                }
                 Inner::Active { player, foe_kind: *kind, monster: MonsterState::new(spec_fn()), duel: Box::new(DuelScene::new()) }
             }
             None => Inner::Complete,
@@ -63,6 +73,13 @@ impl PhaseScene {
                     // vitória completa da pirâmide.
                     Some(DuelOutcome::Won) => {
                         self.save.current_phase += 1;
+                        // RFC-025 regra 5/6: persiste a vida com que o
+                        // jogador terminou o duelo, já com a recuperação
+                        // parcial entre fases aplicada (`inventory::
+                        // recovered_player_life`) — é isso que faz a
+                        // próxima fase começar desgastada, mas não sem
+                        // chance nenhuma.
+                        self.save.player_life = Some(inventory::recovered_player_life(player.life_points, player.max_life));
                         self.save.save();
                         if self.save.current_phase >= PHASES.len() {
                             Some(Transition::GoToGameOver { won: true, turns: duel.turn(), player_hp: player.life_points })
@@ -70,8 +87,18 @@ impl PhaseScene {
                             Some(Transition::GoToMenu)
                         }
                     }
-                    // regra 5: mesmo comportamento de hoje (OverworldScene).
+                    // regra 5/7: derrota já levava ao GameOver de derrota
+                    // (comportamento pré-existente, agora alcançável de
+                    // verdade jogando normalmente). `player_life` volta a
+                    // `None` (vida cheia) em vez de persistir a vida com
+                    // que o jogador morreu (<= 0) — sem isso, "TENTAR DE
+                    // NOVO" (`scenes/gameover.rs`) recarregaria a mesma
+                    // fase com o jogador já morto, um soft-lock. Não é
+                    // punição de progresso (não-objetivo 2: a fase em si
+                    // não muda) — é só o que permite a retentativa
+                    // acontecer de verdade.
                     Some(DuelOutcome::Lost) => {
+                        self.save.player_life = None;
                         self.save.save();
                         Some(Transition::GoToGameOver { won: false, turns: duel.turn(), player_hp: player.life_points })
                     }
@@ -80,7 +107,12 @@ impl PhaseScene {
                     // menu. Diferente de `OverworldScene`, não há mapa pra
                     // empurrar o jogador de volta (fix do B-007 não se
                     // aplica: não existe overlap de AABB pra limpar aqui).
+                    // A vida persiste exatamente como está (sem recuperação
+                    // parcial, que é só regra 6, "vencer uma fase" — fugir
+                    // não venceu nada) — reentrar na mesma fase retoma
+                    // desgastado, não do zero nem já morto.
                     Some(DuelOutcome::Fled) => {
+                        self.save.player_life = Some(player.life_points.max(1));
                         self.save.save();
                         Some(Transition::GoToMenu)
                     }

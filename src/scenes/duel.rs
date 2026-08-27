@@ -1143,10 +1143,17 @@ fn describe_event(ev: &TurnEvent) -> (String, Color) {
         TurnEvent::Healed { amount, .. } => (format!("curar() -> +{amount} de vida"), theme::VIDA),
         TurnEvent::Waited { .. } => ("esperar()".to_string(), theme::POEIRA),
         TurnEvent::BonusStrike { damage } => (format!("script eficiente! golpe bonus: {damage} de dano"), theme::OURO),
-        TurnEvent::CounterAttack { damage, blocked, special } => {
-            let name = if *special { "golpe especial" } else { "contra-ataque" };
+        TurnEvent::CounterAttack { damage, blocked, special, truncated } => {
+            let name = if *special { "golpe especial" } else { "golpe do turno" };
             let suffix = if *blocked { " (bloqueado pela metade)" } else { "" };
-            (format!("orcamento estourou! {name}{suffix}: {damage} de dano"), theme::SANGUE)
+            // RFC-025 regra 1/3: o monstro golpeia todo turno agora -- o
+            // texto so muda de tom quando o script estourou o orcamento
+            // (o golpe fica mais pesado, ver TRUNCATE_DAMAGE_MULTIPLIER).
+            if *truncated {
+                (format!("orcamento estourou! {name} punido{suffix}: {damage} de dano"), theme::SANGUE)
+            } else {
+                (format!("a piramide cobra o folego do turno -- {name}{suffix}: {damage} de dano"), theme::SANGUE)
+            }
         }
         TurnEvent::Truncated { .. } => ("-- execucao interrompida: ciclos esgotados --".to_string(), theme::SANGUE),
         // RFC-015 regra 10: mostra `examined`, nao so o custo em ciclos --

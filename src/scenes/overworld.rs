@@ -65,6 +65,16 @@ impl OverworldScene {
             // parede da borda inferior (y+64=704 == borda, igual ao
             // Guardiao, que ja funciona nessa mesma linha).
             spawn(Kind::Sentinela, data::sentinela(), vec2(900.0, 640.0)),
+            // RFC-017: piso interior sem colisao real (map.collides so
+            // olha tiles dentro de cols/rows do mapa 23x40 -- alem disso
+            // nao ha parede) e dentro do clamp de movimento
+            // ([0, WIDTH-64]x[0, HEIGHT-64] = [0,1216]x[0,656]). x=1100,
+            // y=460 fica a >100px de todos os outros 6 spawns nos dois
+            // eixos: Mummy(450,200) dx=650, Zombie(650,350) dx=450,
+            // Beetle(300,500) dx=800, Sphinx(550,560) dx=550,
+            // Guardiao(150,640) dx=950, Sentinela(900,640) dx=200 dy=180,
+            // jogador(200,300) dx=900.
+            spawn(Kind::Necroguardiao, data::necroguardiao(), vec2(1100.0, 460.0)),
         ];
 
         OverworldScene { map, player, foes, duel: None, save }

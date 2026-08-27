@@ -74,6 +74,13 @@ pub enum Weakness {
     /// lição, não estruturar em profundidade — qualquer `func` com um
     /// `atacar()` dentro já resolve.
     ExigeNomeacao,
+    /// RFC-017: fecha o ciclo de `invocar` (RFC-004) dando a ele um
+    /// monstro dedicado. Só toma dano cheio quando `self.invocations_this_turn`
+    /// (RFC-004, campo já existente, lido sem novo estado) já chegou a 2 no
+    /// turno — em qualquer ordem, dentro ou fora das invocações (RFC-017
+    /// não-objetivo 4). Ensina que pagar `2×INVOKE_COST` para destravar dano
+    /// cheio é uma decisão estratégica que compensa.
+    ExigeInvocacaoDupla,
 }
 
 impl Weakness {
@@ -89,6 +96,7 @@ impl Weakness {
             Weakness::RequerInspecao => "OCULTA A FRAQUEZA",
             Weakness::DuploSelo => "EXIGE GUARDA E INSPECAO",
             Weakness::ExigeNomeacao => "SO RESPEITA GOLPE NOMEADO",
+            Weakness::ExigeInvocacaoDupla => "EXIGE DUAS INVOCACOES",
         }
     }
 }

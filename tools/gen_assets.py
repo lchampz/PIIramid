@@ -71,6 +71,13 @@ P = {
     "sentinela_body": (70, 84, 92, 255),
     "sentinela_dark": (40, 50, 56, 255),
     "sentinela_head": (176, 200, 204, 255),
+    # RFC-017 -- Necroguardiao (provisorio): fecha o ciclo de `invocar`
+    # (RFC-004), entao o tom puxa pro roxo-necromante (diferente do
+    # bronze/pedra-ardosia dos outros seis), com a cabeca em verde-espectral
+    # pra ecoar os dois espiritos convocados do adorno.
+    "necroguardiao_body": (72, 52, 84, 255),
+    "necroguardiao_dark": (42, 28, 52, 255),
+    "necroguardiao_head": (140, 200, 150, 255),
     "clear": (0, 0, 0, 0),
 }
 
@@ -331,6 +338,18 @@ def headdress_nome_verdadeiro(d, cx, top):
     d.line([(cx - 2, top - 3), (cx + 2, top - 3)], fill=P["turquoise"])
 
 
+def headdress_invocacao_dupla(d, cx, top):
+    """Dois cranios espectrais flutuando sobre a cabeca (RFC-017): a
+    fraqueza do Necroguardiao so cede depois de 2 invocacoes no turno -- o
+    adorno mostra literalmente os dois espiritos convocados, um de cada
+    lado, em vez de um par de simbolos cruzados (Aker) ou uma tabuleta
+    (Apagado)."""
+    d.ellipse([cx - 7, top - 6, cx - 3, top - 2], outline=P["turquoise"])
+    d.ellipse([cx + 3, top - 6, cx + 7, top - 2], outline=P["turquoise"])
+    d.point([(cx - 5, top - 4)], fill=P["turquoise"])
+    d.point([(cx + 5, top - 4)], fill=P["turquoise"])
+
+
 body_w_g = 6
 
 
@@ -398,6 +417,16 @@ def gen_sentinela():
     save(build_sheet(frame), "monsters", "sentinela.png")
 
 
+def gen_necroguardiao():
+    # RFC-017: setimo monstro, mesmo padrao dos nao-humanoides anteriores
+    # (draw_creature) -- corpo medio (size_h=7, igual ao sentinela),
+    # quadrado (round_body=False, "estatua" como os demais guardioes) com
+    # o adorno de dois espiritos convocados no lugar de chifre/tabuleta.
+    def frame(d, direction, f):
+        draw_creature(d, direction, f, P["necroguardiao_body"], P["necroguardiao_dark"], P["necroguardiao_head"], size_h=7, legs=4, headdress=headdress_invocacao_dupla, round_body=False)
+    save(build_sheet(frame), "monsters", "necroguardiao.png")
+
+
 # ------------------------------------------------------------- retratos --
 
 def gen_portrait(name, draw_fn, bg=P["stone_mid"]):
@@ -424,6 +453,7 @@ def gen_portraits():
     gen_portrait("sphinx", lambda d: draw_creature(d, DOWN, 0, P["sphinx_body"], P["sphinx_dark"], P["sphinx_gold"], headdress=headdress_sphinx, round_body=False), bg=P["sand_shadow"])
     gen_portrait("guardiao", lambda d: draw_creature(d, DOWN, 0, P["guardiao_body"], P["guardiao_dark"], P["guardiao_head"], size_h=8, headdress=headdress_duplo_selo, round_body=False), bg=P["stone_shadow"])
     gen_portrait("sentinela", lambda d: draw_creature(d, DOWN, 0, P["sentinela_body"], P["sentinela_dark"], P["sentinela_head"], size_h=7, headdress=headdress_nome_verdadeiro, round_body=False), bg=P["stone_shadow"])
+    gen_portrait("necroguardiao", lambda d: draw_creature(d, DOWN, 0, P["necroguardiao_body"], P["necroguardiao_dark"], P["necroguardiao_head"], size_h=7, headdress=headdress_invocacao_dupla, round_body=False), bg=P["stone_shadow"])
 
 
 # ------------------------------------------------------------------ icons --
@@ -559,6 +589,7 @@ def main():
     gen_sphinx()
     gen_guardiao()
     gen_sentinela()
+    gen_necroguardiao()
     gen_portraits()
     gen_icon_espada()
     gen_icon_magia()

@@ -123,3 +123,31 @@ pub fn sentinela() -> MonsterSpec {
         special_attack_name: "Veredito do Nome Verdadeiro",
     }
 }
+
+/// RFC-017: setimo monstro, fecha o ciclo de `invocar` (RFC-004) --
+/// primeira fraqueza que exige a mecanica de invocacao em vez de so
+/// permiti-la. Vida 150 e orcamento 12 calibrados pelo teste
+/// `exige_invocacao_dupla_beats_naive_spam_in_fewer_turns`
+/// (`src/script/vm.rs`): com o divisor `/4` de `resolve_attack`, a
+/// estrategia correta (2x `invocar` pagando `2*INVOKE_COST`, depois
+/// `atacar()` 4x com dano cheio) fecha o combate em bem menos turnos que o
+/// spam ingenuo de `atacar()` solto, sem invocar -- mesma disciplina de
+/// teste de ordenacao desde a RFC-011/012.
+// TODO(storyteller): nome, sala, descricao e nomes dos golpes sao
+// provisorios -- precisam de gancho de necromancia/invocacao.
+pub fn necroguardiao() -> MonsterSpec {
+    MonsterSpec {
+        title: "Necroguardiao (provisorio)",
+        room: "Cripta dos Servos Sem Nome (provisorio)",
+        description: [
+            "Um guardiao que nao age por si -- so por quem ele convoca.",
+            "Golpe sozinho nao o alcanca; e preciso chamar reforcos duas vezes antes.",
+        ],
+        max_life: 150,
+        cycle_budget: 12,
+        weakness: Weakness::ExigeInvocacaoDupla,
+        base_damage: 9,
+        attack_name: "Garra do Servo (provisorio)",
+        special_attack_name: "Chamado dos Tres Mortos (provisorio)",
+    }
+}

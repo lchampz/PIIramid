@@ -24,6 +24,7 @@ pub struct Assets {
     pub sprite_sphinx: Texture2D,
     pub sprite_guardiao: Texture2D,
     pub sprite_sentinela: Texture2D,
+    pub sprite_necroguardiao: Texture2D,
 
     pub portrait_player: Texture2D,
     pub portrait_mummy: Texture2D,
@@ -32,6 +33,7 @@ pub struct Assets {
     pub portrait_sphinx: Texture2D,
     pub portrait_guardiao: Texture2D,
     pub portrait_sentinela: Texture2D,
+    pub portrait_necroguardiao: Texture2D,
 
     pub icon_espada: Texture2D,
     pub icon_magia: Texture2D,
@@ -82,6 +84,7 @@ impl Assets {
             sprite_sphinx: load_pixel_texture("./assets/monsters/sphinx.png").await,
             sprite_guardiao: load_pixel_texture("./assets/monsters/guardiao.png").await,
             sprite_sentinela: load_pixel_texture("./assets/monsters/sentinela.png").await,
+            sprite_necroguardiao: load_pixel_texture("./assets/monsters/necroguardiao.png").await,
 
             portrait_player: load_pixel_texture("./assets/portraits/player.png").await,
             portrait_mummy: load_pixel_texture("./assets/portraits/mummy.png").await,
@@ -90,6 +93,7 @@ impl Assets {
             portrait_sphinx: load_pixel_texture("./assets/portraits/sphinx.png").await,
             portrait_guardiao: load_pixel_texture("./assets/portraits/guardiao.png").await,
             portrait_sentinela: load_pixel_texture("./assets/portraits/sentinela.png").await,
+            portrait_necroguardiao: load_pixel_texture("./assets/portraits/necroguardiao.png").await,
 
             icon_espada: load_pixel_texture("./assets/icons/espada.png").await,
             icon_magia: load_pixel_texture("./assets/icons/magia.png").await,
@@ -121,6 +125,7 @@ impl Assets {
             Kind::Sphinx => &self.sprite_sphinx,
             Kind::Guardiao => &self.sprite_guardiao,
             Kind::Sentinela => &self.sprite_sentinela,
+            Kind::Necroguardiao => &self.sprite_necroguardiao,
         }
     }
 
@@ -140,16 +145,17 @@ impl Assets {
         }
     }
 
-    /// `None` para `DuploSelo`/`ExigeNomeacao`: a spec do designer não cobre
-    /// ícone para essas duas fraquezas (RFC-013, não-objetivo 1) — o
-    /// chamador desenha só o texto da tag, como já era antes desta RFC.
+    /// `None` para `DuploSelo`/`ExigeNomeacao`/`ExigeInvocacaoDupla`: a spec
+    /// do designer não cobre ícone para essas fraquezas (RFC-013,
+    /// não-objetivo 1; RFC-017, não-objetivo 3) — o chamador desenha só o
+    /// texto da tag, como já era antes.
     pub fn icon_for_weakness(&self, weakness: Weakness) -> Option<&Texture2D> {
         match weakness {
             Weakness::Elemento(_) => Some(&self.icon_fraqueza_elemento),
             Weakness::ExigeGuarda => Some(&self.icon_fraqueza_guarda),
             Weakness::Eficiencia { .. } => Some(&self.icon_fraqueza_eficiencia),
             Weakness::RequerInspecao => Some(&self.icon_fraqueza_inspecao),
-            Weakness::DuploSelo | Weakness::ExigeNomeacao => None,
+            Weakness::DuploSelo | Weakness::ExigeNomeacao | Weakness::ExigeInvocacaoDupla => None,
         }
     }
 
@@ -162,6 +168,7 @@ impl Assets {
             Kind::Sphinx => &self.portrait_sphinx,
             Kind::Guardiao => &self.portrait_guardiao,
             Kind::Sentinela => &self.portrait_sentinela,
+            Kind::Necroguardiao => &self.portrait_necroguardiao,
         }
     }
 }

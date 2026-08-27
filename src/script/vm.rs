@@ -1006,6 +1006,22 @@ impl<'a> Vm<'a> {
                     (BASE_ATTACK_DAMAGE / 4, false)
                 }
             }
+            // RFC-017: le `self.invocations_this_turn` (RFC-004, campo ja
+            // existente, incrementado em `exec_invoke`) sem estado novo.
+            // Nao importa se o atacar() decisivo veio de dentro ou de fora
+            // de uma invocacao (nao-objetivo 4) -- so que 2 ja tenham
+            // rodado no turno. Divisor calibrado (nao copiado) pelo teste
+            // de ordenacao `exige_invocacao_dupla_beats_naive_spam_in_fewer_turns`:
+            // /4 faz o spam ingenuo (atacar() repetido, sem invocar) perder
+            // com margem clara contra a estrategia correta (2 invocacoes +
+            // atacar()), mesma disciplina da RFC-011/012.
+            Weakness::ExigeInvocacaoDupla => {
+                if self.invocations_this_turn >= api::MAX_INVOCATIONS_PER_TURN {
+                    (BASE_ATTACK_DAMAGE, true)
+                } else {
+                    (BASE_ATTACK_DAMAGE / 4, false)
+                }
+            }
         }
     }
 }
@@ -1616,6 +1632,99 @@ mod tests {
         assert!(
             correct_turns < naive_turns,
             "a estrategia com func ({correct_turns} turnos) precisa vencer em menos turnos que o spam ingenuo ({naive_turns} turnos)"
+        );
+        assert!(
+            naive_turns >= correct_turns * 2,
+            "margem fraca: ingenua {naive_turns} turnos vs correta {correct_turns} turnos -- nao pode ser um empate raso"
+        );
+    }
+
+    // --- RFC-017: ExigeInvocacaoDupla (7o monstro, fecha o ciclo de invocar) --
+
+    #[test]
+    fn attack_with_two_invocations_this_turn_deals_full_damage() {
+        let src = "invocar a:\n    esperar()\ninvocar b:\n    esperar()\natacar(espada.Bronze)\n";
+        let r = run(src, 12, Weakness::ExigeInvocacaoDupla, Posture::Guarda);
+        match r.events.iter().find(|e| matches!(e, TurnEvent::Attacked { .. })) {
+            Some(TurnEvent::Attacked { effective, damage, .. }) => {
+                assert!(*effective, "com 2 invocacoes no turno o ataque precisa ser efetivo");
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE);
+            }
+            other => panic!("evento inesperado: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attack_with_zero_or_one_invocation_this_turn_deals_reduced_damage() {
+        let sem_invocar = run("atacar(espada.Bronze)\n", 12, Weakness::ExigeInvocacaoDupla, Posture::Guarda);
+        match &sem_invocar.events[0] {
+            TurnEvent::Attacked { effective, damage, .. } => {
+                assert!(!*effective);
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 4);
+            }
+            other => panic!("evento inesperado: {other:?}"),
+        }
+
+        let uma_invocacao = run(
+            "invocar a:\n    esperar()\natacar(espada.Bronze)\n",
+            12,
+            Weakness::ExigeInvocacaoDupla,
+            Posture::Guarda,
+        );
+        match uma_invocacao.events.iter().find(|e| matches!(e, TurnEvent::Attacked { .. })) {
+            Some(TurnEvent::Attacked { effective, damage, .. }) => {
+                assert!(!*effective, "1 invocacao nao basta -- precisa das 2");
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 4);
+            }
+            other => panic!("evento inesperado: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn exige_invocacao_dupla_beats_naive_spam_in_fewer_turns() {
+        // RFC-017 regra 1 / criterio de aceite: compara "ataca direto, sem
+        // invocar" contra "invoca 2 vezes, depois ataca" e prova que a
+        // segunda vence em MENOS turnos, com margem clara -- mesma
+        // disciplina de teste de ordenacao obrigatoria desde a RFC-011/012,
+        // escrita antes de fechar os numeros (Necroguardiao, data.rs): vida
+        // 150, orcamento 12.
+        //
+        // Ingenua: atacar() cabe 6x em 12 ciclos (6x2=12, sem sobra).
+        // invocations_this_turn == 0 o turno inteiro -> reducao /4:
+        // 6 x (BASE_ATTACK_DAMAGE=12 / 4) = 6 x 3 = 18 dano/turno.
+        let naive_src = "atacar(espada.Bronze)\n".repeat(6);
+        let budget = 12;
+        let mut life = 150;
+        let mut naive_turns = 0;
+        while life > 0 && naive_turns < 200 {
+            let program = parse(&naive_src).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeInvocacaoDupla, 9, false).unwrap();
+            assert!(!r.truncated, "spam ingenuo (6x atacar = 12 ciclos) nao deveria estourar o orcamento de 12");
+            life = r.enemy_life;
+            naive_turns += 1;
+        }
+        assert_eq!(life, 0, "spam ingenuo precisa vencer eventualmente (senao o teste nao compara nada)");
+
+        // Correta: 2x invocar (2*INVOKE_COST=4 ciclos no orcamento
+        // principal) + atacar() cabe 4x nos 8 ciclos restantes (4x2=8, sem
+        // sobra) = 12 ciclos, exatamente o orcamento. invocations_this_turn
+        // == 2 antes do primeiro atacar() -> dano cheio:
+        // 4 x BASE_ATTACK_DAMAGE(12) = 48 dano/turno.
+        let correct_src = "invocar a:\n    esperar()\ninvocar b:\n    esperar()\n".to_string() + &"atacar(espada.Bronze)\n".repeat(4);
+        let mut life = 150;
+        let mut correct_turns = 0;
+        while life > 0 && correct_turns < 200 {
+            let program = parse(&correct_src).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 150, Posture::Guarda, Weakness::ExigeInvocacaoDupla, 9, false).unwrap();
+            assert!(!r.truncated, "2 invocacoes + 4 atacar() (12 ciclos) nao pode estourar o orcamento calibrado de 12");
+            life = r.enemy_life;
+            correct_turns += 1;
+        }
+        assert_eq!(life, 0, "script com 2 invocacoes precisa vencer o Necroguardiao dentro do orcamento calibrado");
+
+        assert!(
+            correct_turns < naive_turns,
+            "a estrategia com 2 invocacoes ({correct_turns} turnos) precisa vencer em menos turnos que o spam ingenuo ({naive_turns} turnos)"
         );
         assert!(
             naive_turns >= correct_turns * 2,

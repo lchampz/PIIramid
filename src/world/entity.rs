@@ -31,6 +31,7 @@ pub enum Kind {
     Sphinx,
     Guardiao,
     Sentinela,
+    Necroguardiao,
 }
 
 pub struct Entity {

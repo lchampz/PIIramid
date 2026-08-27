@@ -11,7 +11,7 @@ use macroquad::prelude::*;
 use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
 use crate::inventory::{SaveData, SavedScript};
-use crate::monsters::MonsterState;
+use crate::monsters::{MonsterState, Weakness};
 use crate::script::error::ScriptError;
 use crate::script::parser;
 use crate::script::value::{ItemKind, Value};
@@ -1052,6 +1052,19 @@ impl DuelScene {
                 y += 17.0;
             }
         }
+        // achado #5 da auditoria de QoL: `Weakness::Eficiencia` era a unica
+        // fraqueza que nunca mostrava o numero de verdade que ela mede --
+        // o resto do dossie e concreto (postura em texto exato, carga em
+        // fracao N/20, vida em N/N), só essa ficava em prosa vaga
+        // ("aguenta scripts curtos"). O valor ja existe no dado do monstro
+        // (`max_ciclos`), so faltava desenhar.
+        if let Weakness::Eficiencia { max_ciclos } = monster.spec.weakness {
+            let extra = format!("So aguenta ate {max_ciclos} ciclos de execucao por turno.");
+            for wrapped in wrap_text(&extra, 26) {
+                draw_text_ex(&wrapped, x + 12.0, y, TextParams { font: Some(&assets.font_body), font_size: 14, color: theme::POEIRA, ..Default::default() });
+                y += 17.0;
+            }
+        }
         y += 8.0;
 
         let tag = monster.spec.weakness.label();
@@ -1087,7 +1100,13 @@ impl DuelScene {
         draw_rectangle_lines(x, y, SIDE_W - 20.0, h, 3.0, theme::AREIA_ESCURA);
         draw_rectangle(x, y, SIDE_W - 20.0, 30.0, theme::PEDRA);
         draw_text_ex(
-            "REGISTRO DO TURNO",
+            // achado #6 da auditoria de QoL: o painel acumula o duelo
+            // inteiro desde `DuelScene::new()`, nunca so o turno atual --
+            // o rotulo antigo ("REGISTRO DO TURNO") prometia o oposto do
+            // que a tela mostra. Mudanca de string, sem alterar o corte
+            // silencioso de linhas antigas (isso e feature maior, fora do
+            // escopo deste achado).
+            "REGISTRO DO DUELO",
             x + 10.0,
             y + 20.0,
             TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::POEIRA, ..Default::default() },

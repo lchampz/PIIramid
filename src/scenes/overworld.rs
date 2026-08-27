@@ -133,7 +133,12 @@ impl OverworldScene {
             }
             foe.entity.tick_animation();
             if overlaps(&self.player, &foe.entity) {
-                self.duel = Some((idx, DuelScene::new()));
+                // mapa livre de debug não tem noção de campanha linear
+                // (RFC-005) -- nunca é "a fase final", então a tela de
+                // escolha de função compilada (RFC-030) sempre pode aparecer
+                // aqui, sem afetar nada real (nada é persistido no fluxo de
+                // debug do jeito que a campanha persiste).
+                self.duel = Some((idx, DuelScene::new(false)));
                 break;
             }
         }

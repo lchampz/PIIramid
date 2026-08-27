@@ -64,7 +64,8 @@ impl PhaseScene {
                 if let Some(life) = save.player_life {
                     player.life_points = life.clamp(1, player.max_life);
                 }
-                Inner::Active { player, foe_kind: *kind, monster: Box::new(MonsterState::new(spec_fn())), duel: Box::new(DuelScene::new()) }
+                let is_final_phase = save.current_phase + 1 >= PHASES.len();
+                Inner::Active { player, foe_kind: *kind, monster: Box::new(MonsterState::new(spec_fn())), duel: Box::new(DuelScene::new(is_final_phase)) }
             }
             None => Inner::Complete,
         };

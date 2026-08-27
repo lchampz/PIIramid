@@ -348,11 +348,21 @@ pub struct DuelScene {
     /// destes vira `save.compiled_funcs` por vitória de fase, e a tela some
     /// depois da primeira escolha ou de "pular").
     compile_choice_names: Vec<String>,
+    /// QA (BAIXO-1, auditoria de interação): `true` só quando este duelo é
+    /// o 7º e último da campanha (`save.current_phase + 1 >= PHASES.len()`,
+    /// decidido por `PhaseScene::new` — `DuelScene` em si não conhece
+    /// `PHASES`). Vencer com uma `func` no script pula a tela de escolha de
+    /// RFC-030 quando `true`: não há duelo futuro nenhum onde a isenção de
+    /// `USER_CALL_COST` teria efeito, então a escolha não tem consequência
+    /// — só atrapalharia o clímax da vitória final. `OverworldScene` (mapa
+    /// de debug, sem noção de campanha linear) sempre passa `false`.
+    is_final_phase: bool,
 }
 
 impl DuelScene {
-    pub fn new() -> Self {
+    pub fn new(is_final_phase: bool) -> Self {
         DuelScene {
+            is_final_phase,
             editor: CodeEditor::new(),
             phase: Phase::Writing,
             log: vec![("Escreva um script e aperte EXECUTAR (ou F5).".to_string(), theme::POEIRA)],
@@ -677,7 +687,7 @@ impl DuelScene {
                             // apagar o texto do turno vencedor. Sem
                             // nenhuma func, pula direto pro `Won` normal,
                             // sem forcar nada (não-objetivo 2 da RFC).
-                            if !self.last_run_funcs.is_empty() {
+                            if !self.last_run_funcs.is_empty() && !self.is_final_phase {
                                 self.compile_choice_names = std::mem::take(&mut self.last_run_funcs);
                                 self.show_compile_choice = true;
                                 return None;

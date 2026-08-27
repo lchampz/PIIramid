@@ -296,9 +296,14 @@ impl MenuScene {
         // anterior -- só aparece quando `Transition::GoToMenu` chegou com
         // `last_drop: Some(..)` (vitória real), uma linha a mais logo
         // abaixo do "PROGRESSO", sem tela nova.
+        // RFC-029: `last_drop` pode ter uma segunda linha (separada por
+        // `\n`) com a nota da Grade de Eficiência — desenhada logo abaixo
+        // do despojo, mesmo painel, sem tela nova.
         if let Some(drop) = &self.last_drop {
-            y += 24.0;
-            draw_text_ex(drop, 60.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() });
+            for line in drop.split('\n') {
+                y += 24.0;
+                draw_text_ex(line, 60.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() });
+            }
         }
 
         let items = Self::items();

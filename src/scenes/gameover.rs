@@ -123,8 +123,15 @@ impl GameOverScene {
         // presente em vitórias, ver doc comment de `last_drop`) -- uma
         // linha extra logo abaixo do texto de sabor, sem competir com a
         // grade de estatísticas abaixo.
+        // RFC-029: `last_drop` pode ter uma segunda linha (separada por
+        // `\n`) com a nota da Grade de Eficiência do último monstro —
+        // mesma linha extra que `MenuScene` desenha nas vitórias parciais.
         if let Some(drop) = &self.last_drop {
-            draw_text_ex(drop, card_x + 44.0, y + 6.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() });
+            let mut dy = y + 6.0;
+            for line in drop.split('\n') {
+                draw_text_ex(line, card_x + 44.0, dy, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() });
+                dy += 22.0;
+            }
         }
 
         let stats: [(&str, String); 3] = [

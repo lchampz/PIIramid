@@ -4,6 +4,7 @@
 
 mod assets;
 mod config;
+mod grade;
 mod inventory;
 mod monsters;
 mod scenes;

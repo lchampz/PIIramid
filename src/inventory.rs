@@ -19,6 +19,7 @@
 //! ausência de item equipado sempre degradam pro comportamento anterior à
 //! RFC-002 — nunca pro pânico.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -199,6 +200,17 @@ pub struct SaveData {
     /// padrão de `player_class`/`current_phase` acima.
     #[serde(default)]
     pub player_life: Option<i32>,
+    /// RFC-029, regra 3: melhor resultado do jogador contra cada monstro —
+    /// chave `MonsterSpec.title`, valor `(turnos gastos, ciclos médios por
+    /// turno)`. `grade::apply_duel_result` é o único escritor (só grava
+    /// quando o novo resultado é estritamente melhor que o salvo — regra
+    /// 5, "sem comparação entre jogadores", e critério de aceite "vencer
+    /// pior nunca regride o recorde"). `#[serde(default)]`: um save
+    /// gravado antes desta RFC não tem essa chave no JSON — desserializa
+    /// como mapa vazio, mesmo padrão de `player_life`/`current_phase`
+    /// acima.
+    #[serde(default)]
+    pub best_result: HashMap<String, (u32, f32)>,
 }
 
 /// RFC-025 regra 6: fração da vida perdida que o jogador recupera ao
@@ -300,6 +312,7 @@ mod tests {
             player_class: None,
             current_phase: 0,
             player_life: None,
+            best_result: HashMap::new(),
         }
     }
 
@@ -432,6 +445,31 @@ mod tests {
         assert!(recovered_player_life(10, 100) > 10, "recuperacao parcial precisa recuperar alguma vida");
         assert_eq!(recovered_player_life(100, 100), 100, "vida cheia nao pode overhealar acima do maximo");
         assert_eq!(recovered_player_life(0, 100), 90, "90% de recuperacao sobre 100 de vida perdida");
+    }
+
+    #[test]
+    fn default_save_has_no_best_result() {
+        assert!(SaveData::default().best_result.is_empty());
+    }
+
+    #[test]
+    fn save_json_without_best_result_field_deserializes_as_empty_map() {
+        // Simula um save gravado antes da RFC-029: o JSON nao tem a chave
+        // "best_result" -- #[serde(default)] precisa cobrir esse caso sem
+        // falhar (regra 3 da RFC-029), mesmo padrao de player_life acima.
+        let json = r#"{"loadout":{"arma":null,"magia":null,"escudo":null,"pocao":null},"bag":[],"scripts":[],"player_class":null,"current_phase":2,"player_life":null}"#;
+        let loaded: SaveData = serde_json::from_str(json).expect("save antigo sem best_result deve desserializar");
+        assert!(loaded.best_result.is_empty());
+    }
+
+    #[test]
+    fn save_data_with_best_result_round_trips() {
+        let mut data = sample();
+        data.best_result.insert("Mumia".to_string(), (3, 12.0));
+        let json = serde_json::to_string(&data).expect("serializar SaveData com recorde");
+        let back: SaveData = serde_json::from_str(&json).expect("desserializar SaveData com recorde");
+        assert_eq!(back.best_result.get("Mumia"), Some(&(3, 12.0)));
+        assert_eq!(data, back);
     }
 
     #[test]

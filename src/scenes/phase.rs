@@ -87,11 +87,30 @@ impl PhaseScene {
                         // mesmo espírito de `player_life` acima. Derrota e
                         // fuga (braços abaixo) nunca chamam esta função.
                         let drop_label = inventory::apply_phase_victory_drop(&mut self.save, &monster.spec.drop);
+                        // RFC-029, regra 4/5: avalia o duelo que acabou de
+                        // ser vencido (turnos + ciclos médios, só dados que
+                        // `DuelScene` já produz) contra o recorde salvo
+                        // daquele monstro específico e persiste se for
+                        // melhor. `grade_line` some do texto (só o despojo
+                        // aparece) se por algum motivo não houver script de
+                        // referência calibrado — nunca inventa nota.
+                        let grade_line = crate::grade::apply_duel_result(&mut self.save.best_result, &monster.spec, duel.turns_played(), duel.total_cycles_used())
+                            .map(|eval| {
+                                if eval.is_new_record {
+                                    format!("Nota: {} (novo recorde!)", eval.grade.label())
+                                } else {
+                                    format!("Nota: {}", eval.grade.label())
+                                }
+                            });
+                        let feedback = match grade_line {
+                            Some(line) => format!("{drop_label}\n{line}"),
+                            None => drop_label,
+                        };
                         self.save.save();
                         if self.save.current_phase >= PHASES.len() {
-                            Some(Transition::GoToGameOver { won: true, turns: duel.turn(), player_hp: player.life_points, last_drop: Some(drop_label) })
+                            Some(Transition::GoToGameOver { won: true, turns: duel.turn(), player_hp: player.life_points, last_drop: Some(feedback) })
                         } else {
-                            Some(Transition::GoToMenu { last_drop: Some(drop_label) })
+                            Some(Transition::GoToMenu { last_drop: Some(feedback) })
                         }
                     }
                     // regra 5/7: derrota já levava ao GameOver de derrota

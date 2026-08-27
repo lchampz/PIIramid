@@ -31,11 +31,17 @@ pub enum Transition {
     /// mesmo espírito de `won`/`turns`/`player_hp` já cruzarem a fronteira
     /// de cena por aqui — `None` em toda derrota/fuga e em todo caminho que
     /// não passa por `PhaseScene` (mapa livre de debug, telas sem duelo).
+    /// RFC-029, regra 4: numa vitória real, uma segunda linha (separada
+    /// por `\n`) carrega a nota da Grade de Eficiência
+    /// (`grade::apply_duel_result`) — reaproveita este mesmo campo em vez
+    /// de abrir outro, mesmo padrão de "campo opcional" que a RFC-028 já
+    /// estabeleceu aqui.
     GoToGameOver { won: bool, turns: u32, player_hp: i32, last_drop: Option<String> },
     /// RFC-028, regra 4: mesma ideia acima — vitória parcial de fase volta
     /// direto ao menu (`PhaseScene::update`), então é aqui, não em
     /// `GoToGameOver`, que o feedback do despojo intermediário precisa
     /// viajar. `None` em toda transição que não vem de uma vitória de fase.
+    /// RFC-029: mesma segunda linha de nota descrita acima.
     GoToMenu { last_drop: Option<String> },
     GoToGrimoire,
     GoToStyleGuide,

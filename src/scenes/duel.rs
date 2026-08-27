@@ -322,6 +322,14 @@ pub struct DuelScene {
     /// padrão modal de `show_load_menu` (bloqueia o resto de `update()`
     /// naquele frame).
     show_rehearsal: bool,
+    /// RFC-029: `cycles_used` de cada turno realmente executado (só o
+    /// braço `Ok(r)` de `run_script` empurra aqui — um turno que nem
+    /// chegou a parsear nunca conta). É o histórico que a Grade de
+    /// Eficiência lê para calcular turnos gastos e ciclos médios por turno
+    /// do duelo inteiro (`turns_played`/`total_cycles_used` abaixo) — sem
+    /// isso, `DuelScene` só sabia o resultado do *último* turno
+    /// (`Phase::Executing`), nunca o acumulado do duelo.
+    cycles_history: Vec<u32>,
 }
 
 impl DuelScene {
@@ -357,11 +365,29 @@ impl DuelScene {
             live_check: LiveCheck::Valid { cycles_used: 0, truncated: false },
             rehearsal: None,
             show_rehearsal: false,
+            cycles_history: Vec::new(),
         }
     }
 
     pub fn turn(&self) -> u32 {
         self.turn
+    }
+
+    /// RFC-029: quantos turnos realmente executaram um script válido neste
+    /// duelo (`cycles_history.len()`) — diferente de `self.turn()`, que já
+    /// incrementa mesmo num turno que falhou o parse (ver `run_script`).
+    /// É este número, não `turn()`, que a Grade de Eficiência usa como
+    /// "turnos gastos".
+    pub fn turns_played(&self) -> u32 {
+        self.cycles_history.len() as u32
+    }
+
+    /// RFC-029: soma de `cycles_used` de todos os turnos executados no
+    /// duelo inteiro — o dado bruto que `grade::apply_duel_result` usa
+    /// para calcular ciclos médios por turno, sem nenhum cálculo novo de
+    /// VM (regra 1 da RFC).
+    pub fn total_cycles_used(&self) -> u32 {
+        self.cycles_history.iter().sum()
     }
 
     fn command_rect(index: usize) -> Rect {
@@ -614,6 +640,11 @@ impl DuelScene {
         match result {
             Ok(r) => {
                 player.life_points = r.player_life;
+                // RFC-029: acumula antes de mover `r` para `Phase::Executing`
+                // -- é este histórico que sobrevive ao duelo inteiro, ao
+                // contrário de `Phase::Executing`, que só guarda o último
+                // turno.
+                self.cycles_history.push(r.cycles_used);
                 self.phase = Phase::Executing { result: r, index: 0, timer: EVENT_TICK_SECONDS };
             }
             Err(e) => {

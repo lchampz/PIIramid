@@ -70,6 +70,11 @@ pub struct RehearsalReport {
 /// que o chamador passou. `program` já deve ter passado pelo parser (regra 2
 /// da RFC — erro de sintaxe é responsabilidade do chamador, antes de chamar
 /// isto).
+/// `#[allow(dead_code)]`: fora dos testes (`cfg(test)`), só
+/// `rehearse_with_compiled_funcs` é chamada (`scenes/duel.rs`) -- mesmo
+/// motivo que `vm::run_turn`/`vm::simulate_turn` já documentam: este crate
+/// é um binário, não uma lib, então `pub` não isenta o lint de dead-code.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn rehearse(
     program: &[Stmt],
@@ -81,6 +86,28 @@ pub fn rehearse(
     player_class: Option<PlayerClass>,
     bag: Option<&Bag>,
 ) -> RehearsalReport {
+    rehearse_with_compiled_funcs(program, vars, player_life, player_max_life, monster, loadout, player_class, bag, &[])
+}
+
+/// Mesmo Ensaio Geral que `rehearse`, com a lista de nomes de `func`
+/// "compiladas" (RFC-030) — sem isso, o Ensaio preveria mais ciclos gastos
+/// do que o turno real vai cobrar para um script que chama uma func já
+/// compilada, quebrando a garantia de que ensaiar bate com executar de
+/// verdade (mesmo raciocínio do critério de aceite #2 abaixo). `rehearse`
+/// continua existindo só pela compatibilidade dos testes já escritos
+/// contra ela, encaminhando aqui com uma lista vazia.
+#[allow(clippy::too_many_arguments)]
+pub fn rehearse_with_compiled_funcs(
+    program: &[Stmt],
+    vars: &HashMap<String, Value>,
+    player_life: i32,
+    player_max_life: i32,
+    monster: &MonsterState,
+    loadout: Option<&Loadout>,
+    player_class: Option<PlayerClass>,
+    bag: Option<&Bag>,
+    compiled_funcs: &[String],
+) -> RehearsalReport {
     let mut sim_vars = vars.clone();
     let mut sim_monster = monster.clone();
     let mut sim_player_life = player_life;
@@ -88,7 +115,7 @@ pub fn rehearse(
 
     for turn in 1..=REHEARSAL_TURN_CAP {
         let enemy_life_before = sim_monster.life;
-        let result = match vm::simulate_turn(
+        let result = match vm::simulate_turn_with_compiled_funcs(
             program,
             &mut sim_vars,
             &mut sim_monster,
@@ -97,6 +124,7 @@ pub fn rehearse(
             loadout,
             player_class,
             bag,
+            compiled_funcs,
         ) {
             Ok(r) => r,
             Err(e) => return RehearsalReport { turns, end: RehearsalEnd::Error(e) },

@@ -211,6 +211,19 @@ pub struct SaveData {
     /// acima.
     #[serde(default)]
     pub best_result: HashMap<String, (u32, f32)>,
+    /// RFC-030, regra 1: nomes de `func` "compiladas" -- `Vm` (`script/vm.rs`)
+    /// pula `USER_CALL_COST` (`script/api.rs`) para toda chamada de uma
+    /// função com um destes nomes, para sempre neste save. A isenção é por
+    /// **nome**, não pelo texto do corpo (regra 4): redefinir `func` com um
+    /// nome já aqui continua isento. Preenchido só pela tela de escolha
+    /// pós-vitória (`scenes/duel.rs`), no máximo 1 nome novo por vitória de
+    /// fase -- nunca mais que `monsters::PHASES.len()` (7) entradas, mas
+    /// esse teto é uma consequência da campanha ter 7 fases, não checado
+    /// aqui. `#[serde(default)]`: mesmo padrão de `best_result`/`player_life`
+    /// acima -- um save gravado antes desta RFC não tem essa chave no JSON,
+    /// desserializa como vetor vazio.
+    #[serde(default)]
+    pub compiled_funcs: Vec<String>,
 }
 
 /// RFC-025 regra 6: fração da vida perdida que o jogador recupera ao
@@ -313,6 +326,7 @@ mod tests {
             current_phase: 0,
             player_life: None,
             best_result: HashMap::new(),
+            compiled_funcs: Vec::new(),
         }
     }
 
@@ -535,6 +549,31 @@ mod tests {
             assert!(seen.insert(id.as_str()), "id de drop duplicado no bestiario: {id}");
         }
         assert_eq!(seen.len(), 7);
+    }
+
+    #[test]
+    fn default_save_has_no_compiled_funcs() {
+        assert!(SaveData::default().compiled_funcs.is_empty());
+    }
+
+    #[test]
+    fn save_json_without_compiled_funcs_field_deserializes_as_empty_vec() {
+        // Simula um save gravado antes da RFC-030: o JSON nao tem a chave
+        // "compiled_funcs" -- #[serde(default)] precisa cobrir esse caso
+        // sem falhar (regra 1 da RFC-030), mesmo padrao de best_result acima.
+        let json = r#"{"loadout":{"arma":null,"magia":null,"escudo":null,"pocao":null},"bag":[],"scripts":[],"player_class":null,"current_phase":2,"player_life":null,"best_result":{}}"#;
+        let loaded: SaveData = serde_json::from_str(json).expect("save antigo sem compiled_funcs deve desserializar");
+        assert!(loaded.compiled_funcs.is_empty());
+    }
+
+    #[test]
+    fn save_data_with_compiled_funcs_round_trips() {
+        let mut data = sample();
+        data.compiled_funcs.push("golpe".to_string());
+        let json = serde_json::to_string(&data).expect("serializar SaveData com funcoes compiladas");
+        let back: SaveData = serde_json::from_str(&json).expect("desserializar SaveData com funcoes compiladas");
+        assert_eq!(back.compiled_funcs, vec!["golpe".to_string()]);
+        assert_eq!(data, back);
     }
 
     #[test]

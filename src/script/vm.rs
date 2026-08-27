@@ -80,6 +80,14 @@ pub struct Vm<'a> {
     /// garante a regra 13 (coleta idêntica nas duas) por construção — não
     /// por repetir a lógica duas vezes e confiar que elas não divirjam.
     funcs: HashMap<String, Vec<Stmt>>,
+    /// Nomes de func "compiladas" (RFC-030, regra 3): `eval_user_call` pula
+    /// `USER_CALL_COST` só para uma chamada cujo nome está aqui — o corpo da
+    /// função continua executando por `exec_block` normalmente, que cobra
+    /// cada `Stmt` seu do jeito de sempre (regra central: a isenção nunca
+    /// alcança o corpo, só a linha de invocação). Slice emprestado de
+    /// `SaveData::compiled_funcs` — vazio reproduz 100% do comportamento
+    /// anterior a esta RFC, o mesmo espírito de `loadout: None`/`bag: None`.
+    compiled_funcs: &'a [String],
     /// Profundidade atual de chamada de função do jogador (RFC-006, regra
     /// 11). Rede de segurança de engenharia: o orçamento de ciclos
     /// (`USER_CALL_COST` por invocação) já trunca a recursão bem antes
@@ -177,6 +185,24 @@ fn collect_funcs(program: &[Stmt]) -> Result<HashMap<String, Vec<Stmt>>, ScriptE
         }
     }
     Ok(funcs)
+}
+
+/// Nomes de `func` definidas no nível superior de um programa já parseado
+/// (RFC-030, regra 2) — usado pela tela de escolha pós-vitória
+/// (`scenes/duel.rs`) para saber se há algo a oferecer para "compilar" e
+/// quais nomes oferecer. Mesmo escopo de busca que `collect_funcs` (só
+/// nível superior — o parser já recusa `func` aninhado, regra 5 da
+/// RFC-006), mas sem validar colisão: quando isto é chamado o programa já
+/// rodou com sucesso, então `collect_funcs` já teria barrado qualquer nome
+/// duplicado ou colidindo com uma nativa antes de chegar aqui.
+pub fn defined_func_names(program: &[Stmt]) -> Vec<String> {
+    program
+        .iter()
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::FuncDef { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Conta recursivamente quantos `Stmt` existem na árvore — o "tamanho do
@@ -349,6 +375,51 @@ pub fn run_turn_with_bag(
     player_class: Option<PlayerClass>,
     bag: Option<&Bag>,
 ) -> Result<TurnResult, ScriptError> {
+    run_turn_with_compiled_funcs(
+        program,
+        vars,
+        cycle_budget,
+        player_life,
+        player_max_life,
+        enemy_life,
+        enemy_max_life,
+        enemy_posture,
+        enemy_weakness,
+        enemy_base_damage,
+        enemy_special_ready,
+        loadout,
+        player_class,
+        bag,
+        &[],
+    )
+}
+
+/// Mesma execução de turno que `run_turn_with_bag`, com a lista de nomes
+/// de `func` "compiladas" (RFC-030, regra 3) — `SaveData::compiled_funcs`.
+/// É esta a função que `simulate_turn_with_compiled_funcs` (e, por baixo
+/// dela, o turno real de `scenes/duel.rs`) chama depois desta RFC;
+/// `run_turn_with_bag` continua existindo só pela compatibilidade dos
+/// testes já escritos contra ela (mesmo raciocínio das três funções
+/// anteriores na cadeia), encaminhando aqui com uma lista vazia — o mesmo
+/// comportamento de sempre, nenhuma func isenta.
+#[allow(clippy::too_many_arguments)]
+pub fn run_turn_with_compiled_funcs(
+    program: &[Stmt],
+    vars: &mut HashMap<String, Value>,
+    cycle_budget: u32,
+    player_life: i32,
+    player_max_life: i32,
+    enemy_life: i32,
+    enemy_max_life: i32,
+    enemy_posture: Posture,
+    enemy_weakness: Weakness,
+    enemy_base_damage: i32,
+    enemy_special_ready: bool,
+    loadout: Option<&Loadout>,
+    player_class: Option<PlayerClass>,
+    bag: Option<&Bag>,
+    compiled_funcs: &[String],
+) -> Result<TurnResult, ScriptError> {
     // Coleta de funções do jogador (regra 4) uma única vez, antes de
     // qualquer passada. As duas passadas recebem um clone do mesmo mapa —
     // isso satisfaz a regra 13 ("a coleta acontece nas duas, de forma
@@ -360,7 +431,10 @@ pub fn run_turn_with_bag(
     // jogador, nunca sobre o original, senão uma escrita de variável
     // vazaria do dry-run para o estado real mesmo quando o script trunca
     // antes de chegar lá de verdade na passada de verdade. Reaproveita
-    // `probe_pass` (RFC-018) em vez de repetir a lógica aqui.
+    // `probe_pass` (RFC-018) em vez de repetir a lógica aqui. Passa
+    // `compiled_funcs` também (RFC-030): sem isso, a barra de ciclos ao
+    // vivo cobraria diferente do que a execução real cobra pra uma func
+    // compilada, quebrando a regra de informação completa da RFC-018.
     probe_pass(
         program,
         vars,
@@ -375,6 +449,7 @@ pub fn run_turn_with_bag(
         loadout,
         player_class,
         bag,
+        compiled_funcs,
     )?;
 
     // segunda passada: roda de verdade, escrevendo no `vars` emprestado
@@ -394,6 +469,7 @@ pub fn run_turn_with_bag(
         loadout,
         player_class,
         bag,
+        compiled_funcs,
     );
     let truncated = match vm.exec_program(program) {
         Ok(()) => false,
@@ -467,6 +543,10 @@ pub fn run_turn_with_bag(
 /// pelo turno real (`monster: &mut MonsterState` emprestado da cena) quanto
 /// pelo Ensaio (`script::rehearsal::rehearse`, sobre um clone local) — nunca
 /// duas cópias da lógica de "o que acontece entre dois turnos".
+/// `#[allow(dead_code)]`: fora dos testes (`cfg(test)`), só
+/// `simulate_turn_with_compiled_funcs` é chamada (`scenes/duel.rs`,
+/// RFC-030) -- mesmo motivo de `run_turn`/`run_turn_with_bag`.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_turn(
     program: &[Stmt],
@@ -478,9 +558,30 @@ pub fn simulate_turn(
     player_class: Option<PlayerClass>,
     bag: Option<&Bag>,
 ) -> Result<TurnResult, ScriptError> {
+    simulate_turn_with_compiled_funcs(program, vars, monster, player_life, player_max_life, loadout, player_class, bag, &[])
+}
+
+/// Mesma rotina que `simulate_turn`, com a lista de nomes de `func`
+/// "compiladas" (RFC-030, regra 3). É esta a versão que o turno real
+/// (`scenes/duel.rs::run_script`) chama depois desta RFC, passando
+/// `&save.compiled_funcs`; `simulate_turn` continua existindo só pela
+/// compatibilidade dos testes já escritos contra ela e do Ensaio Geral sem
+/// funções compiladas, encaminhando aqui com uma lista vazia.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_turn_with_compiled_funcs(
+    program: &[Stmt],
+    vars: &mut HashMap<String, Value>,
+    monster: &mut crate::monsters::MonsterState,
+    player_life: i32,
+    player_max_life: i32,
+    loadout: Option<&Loadout>,
+    player_class: Option<PlayerClass>,
+    bag: Option<&Bag>,
+    compiled_funcs: &[String],
+) -> Result<TurnResult, ScriptError> {
     monster.begin_turn();
     let special_ready = monster.special_ready();
-    let result = run_turn_with_bag(
+    let result = run_turn_with_compiled_funcs(
         program,
         vars,
         monster.spec.cycle_budget,
@@ -495,6 +596,7 @@ pub fn simulate_turn(
         loadout,
         player_class,
         bag,
+        compiled_funcs,
     )?;
     monster.life = result.enemy_life;
     if result.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { special: true, .. })) {
@@ -538,6 +640,7 @@ fn probe_pass(
     loadout: Option<&Loadout>,
     player_class: Option<PlayerClass>,
     bag: Option<&Bag>,
+    compiled_funcs: &[String],
 ) -> Result<ProbeResult, ScriptError> {
     let mut probe_vars = vars.clone();
     let mut probe = Vm::new(
@@ -554,6 +657,7 @@ fn probe_pass(
         loadout,
         player_class,
         bag,
+        compiled_funcs,
     );
     match probe.exec_program(program) {
         Ok(()) => Ok(ProbeResult { cycles_used: probe.cycles_used, truncated: false }),
@@ -570,6 +674,10 @@ fn probe_pass(
 /// só lido: o clone interno de `probe_pass` garante que o mapa do jogador
 /// nunca é mutado por uma validação ao vivo, não importa quantas rodem
 /// sem o jogador apertar EXECUTAR.
+/// `#[allow(dead_code)]`: fora dos testes (`cfg(test)`, `script/parser.rs`),
+/// só `probe_turn_with_compiled_funcs` é chamada (`scenes/duel.rs`,
+/// RFC-030) -- mesmo motivo de `run_turn`/`run_turn_with_bag`.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn probe_turn_with_bag(
     program: &[Stmt],
@@ -584,6 +692,45 @@ pub fn probe_turn_with_bag(
     loadout: Option<&Loadout>,
     player_class: Option<PlayerClass>,
     bag: Option<&Bag>,
+) -> Result<ProbeResult, ScriptError> {
+    probe_turn_with_compiled_funcs(
+        program,
+        vars,
+        cycle_budget,
+        player_life,
+        player_max_life,
+        enemy_life,
+        enemy_max_life,
+        enemy_posture,
+        enemy_weakness,
+        loadout,
+        player_class,
+        bag,
+        &[],
+    )
+}
+
+/// Mesma validação ao vivo que `probe_turn_with_bag`, com a lista de nomes
+/// de `func` "compiladas" (RFC-030) — sem isso, a barra de ciclos ao vivo
+/// (RFC-018) mostraria um número maior do que o turno real vai cobrar para
+/// um script que chama uma func já compilada. `probe_turn_with_bag`
+/// continua existindo só pela compatibilidade do teste em
+/// `script/parser.rs`, encaminhando aqui com uma lista vazia.
+#[allow(clippy::too_many_arguments)]
+pub fn probe_turn_with_compiled_funcs(
+    program: &[Stmt],
+    vars: &HashMap<String, Value>,
+    cycle_budget: u32,
+    player_life: i32,
+    player_max_life: i32,
+    enemy_life: i32,
+    enemy_max_life: i32,
+    enemy_posture: Posture,
+    enemy_weakness: Weakness,
+    loadout: Option<&Loadout>,
+    player_class: Option<PlayerClass>,
+    bag: Option<&Bag>,
+    compiled_funcs: &[String],
 ) -> Result<ProbeResult, ScriptError> {
     let funcs = collect_funcs(program)?;
     probe_pass(
@@ -600,6 +747,7 @@ pub fn probe_turn_with_bag(
         loadout,
         player_class,
         bag,
+        compiled_funcs,
     )
 }
 
@@ -619,6 +767,7 @@ impl<'a> Vm<'a> {
         loadout: Option<&'a Loadout>,
         player_class: Option<PlayerClass>,
         bag: Option<&'a Bag>,
+        compiled_funcs: &'a [String],
     ) -> Self {
         Vm {
             vars,
@@ -627,6 +776,7 @@ impl<'a> Vm<'a> {
             dry_run,
             events: Vec::new(),
             funcs,
+            compiled_funcs,
             depth: 0,
             invocations_this_turn: 0,
             player_life,
@@ -1024,7 +1174,14 @@ impl<'a> Vm<'a> {
     /// dele (regra 12), porque `charge`/`Signal::Truncated` não fazem
     /// distinção — não há caso especial aqui.
     fn eval_user_call(&mut self, name: &str, body: &[Stmt], args: &[Expr], line: usize) -> VResult<Value> {
-        self.charge(line, api::USER_CALL_COST)?;
+        // RFC-030 regra 3: uma func "compilada" (nome presente em
+        // `compiled_funcs`) não cobra `USER_CALL_COST` -- mas só a chamada.
+        // O `exec_block(body)` logo abaixo continua cobrando cada `Stmt` do
+        // corpo do jeito de sempre, então a isenção nunca vaza pra dentro
+        // do corpo (regra central da RFC).
+        if !self.compiled_funcs.iter().any(|compiled| compiled == name) {
+            self.charge(line, api::USER_CALL_COST)?;
+        }
 
         let mut values = Vec::with_capacity(args.len());
         for a in args {
@@ -1494,6 +1651,113 @@ mod tests {
         let src = "func combo():\n    atacar(espada[\"ferro\"])\n    defender(escudo[\"ouro\"])\n\ncombo()\n";
         let r = run(src, 20, Weakness::Elemento(Element::Fogo), Posture::Guarda);
         assert_eq!(r.cycles_used, api::USER_CALL_COST + 2 + 1 + 4 * api::STMT_SIZE_COST);
+    }
+
+    // --- RFC-030: compilacao duradoura ------------------------------
+
+    fn run_with_compiled_funcs(src: &str, budget: u32, weakness: Weakness, posture: Posture, compiled_funcs: &[String]) -> TurnResult {
+        let program = parse(src).unwrap();
+        let mut vars = HashMap::new();
+        run_turn_with_compiled_funcs(
+            &program,
+            &mut vars,
+            budget,
+            100,
+            100,
+            100,
+            100,
+            posture,
+            weakness,
+            10,
+            false,
+            None,
+            None,
+            None,
+            compiled_funcs,
+        )
+        .unwrap()
+    }
+
+    /// Prova central da RFC-030: chamar a mesma funcao (mesmo corpo, mesmo
+    /// numero de chamadas) com o nome presente em `compiled_funcs` custa
+    /// exatamente `USER_CALL_COST` a menos POR CHAMADA do que sem
+    /// compilar -- nunca mais, nunca menos. Isso prova ao mesmo tempo que
+    /// (a) compilar reduz o custo de chamada e (b) a reducao e' exatamente
+    /// o `USER_CALL_COST`, nao um desconto acidental maior que vazou pro
+    /// corpo.
+    #[test]
+    fn compiling_a_func_makes_repeated_calls_cheaper_by_exactly_the_call_cost() {
+        let src = "func golpe():\n    atacar(espada[\"ferro\"])\n\ngolpe()\ngolpe()\ngolpe()\n";
+        let uncompiled = run_with_compiled_funcs(src, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &[]);
+        let compiled = run_with_compiled_funcs(src, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &["golpe".to_string()]);
+
+        let calls = 3;
+        assert_eq!(
+            uncompiled.cycles_used - compiled.cycles_used,
+            calls * api::USER_CALL_COST,
+            "compilar 'golpe' devia baratear exatamente {calls} chamadas, nada alem disso"
+        );
+        // cada atacar() dentro do corpo causa o mesmo dano nos dois casos
+        // -- a isenção nunca muda o que o script FAZ, só o que ele custa
+        // pra chamar. `enemy_life` final por si só NÃO pode ser comparado
+        // aqui: o script compilado sobra mais ciclo (3 a menos gastos) e
+        // esse sobra vira `BonusStrike` maior (regra do jogo, RFC-024) --
+        // é exatamente o "cada vitória deixa a caixa de ferramentas mais
+        // barata" que a RFC promete, não um bug deste teste.
+        let attack_damages = |r: &TurnResult| -> Vec<i32> {
+            r.events.iter().filter_map(|e| if let TurnEvent::Attacked { damage, .. } = e { Some(*damage) } else { None }).collect()
+        };
+        assert_eq!(attack_damages(&uncompiled), attack_damages(&compiled));
+        assert!(compiled.enemy_life < uncompiled.enemy_life, "sobrar mais ciclo (chamada de graca) devia gerar bonus strike maior, nao igual ou pior");
+    }
+
+    /// Regra central da RFC-030 (item 3 da especificação): a isenção nunca
+    /// alcança o corpo da função. Um corpo mais pesado (aqui, um `while`
+    /// que itera e cobra `LOOP_TICK_COST` por checagem) continua custando
+    /// o mesmo entre compilado e não compilado -- só o `USER_CALL_COST` da
+    /// chamada em si muda.
+    #[test]
+    fn compiling_a_func_never_discounts_its_body_cost() {
+        let src = "func golpes():\n    for i in 0..3:\n        atacar(espada[\"ferro\"])\n\ngolpes()\n";
+        let uncompiled = run_with_compiled_funcs(src, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &[]);
+        let compiled = run_with_compiled_funcs(src, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &["golpes".to_string()]);
+
+        // unica diferenca possivel: 1 chamada de menos cobrando USER_CALL_COST
+        // -- se o `for` (LOOP_TICK_COST por checagem) tivesse ficado de graca
+        // por acidente, essa diferenca seria maior que USER_CALL_COST.
+        assert_eq!(uncompiled.cycles_used - compiled.cycles_used, api::USER_CALL_COST);
+    }
+
+    /// Regra 4 da RFC-030: a isenção é por **nome**, não pelo texto do
+    /// corpo salvo no momento da compilação -- redefinir `func` com um
+    /// nome já compilado continua isento, mesmo com um corpo diferente do
+    /// que existia quando o jogador compilou.
+    #[test]
+    fn redefining_a_compiled_name_with_a_different_body_keeps_the_exemption() {
+        let original = "func golpe():\n    atacar(espada[\"ferro\"])\n\ngolpe()\n";
+        let redefined = "func golpe():\n    esperar()\n    atacar(espada[\"ferro\"])\n\ngolpe()\n";
+
+        let compiled_names = vec!["golpe".to_string()];
+        let uncompiled_redefined = run_with_compiled_funcs(redefined, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &[]);
+        let compiled_redefined = run_with_compiled_funcs(redefined, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &compiled_names);
+
+        assert_eq!(uncompiled_redefined.cycles_used - compiled_redefined.cycles_used, api::USER_CALL_COST);
+        // e continua sendo so a chamada -- o corpo novo (com o esperar()
+        // extra) ainda cobra os proprios ciclos normalmente.
+        let _ = run_with_compiled_funcs(original, 100, Weakness::Elemento(Element::Fogo), Posture::Guarda, &compiled_names);
+    }
+
+    /// `defined_func_names` (RFC-030, regra 2): so nomes do nivel superior,
+    /// na ordem em que aparecem no texto, vazio quando o script nao define
+    /// nenhuma func -- e' o que a tela de escolha pos-vitoria consulta pra
+    /// saber se ha algo a oferecer.
+    #[test]
+    fn defined_func_names_lists_top_level_funcs_in_source_order() {
+        let program = parse("func b():\n    esperar()\n\nfunc a():\n    esperar()\n\na()\nb()\n").unwrap();
+        assert_eq!(defined_func_names(&program), vec!["b".to_string(), "a".to_string()]);
+
+        let no_funcs = parse("atacar(espada[\"ferro\"])\n").unwrap();
+        assert!(defined_func_names(&no_funcs).is_empty());
     }
 
     #[test]

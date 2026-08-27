@@ -330,6 +330,24 @@ pub struct DuelScene {
     /// isso, `DuelScene` só sabia o resultado do *último* turno
     /// (`Phase::Executing`), nunca o acumulado do duelo.
     cycles_history: Vec<u32>,
+    /// RFC-030 regra 2: nomes de `func` definidos pelo último script rodado
+    /// (`run_script`), lidos antes de `self.editor.clear()` apagar o texto
+    /// -- é o que a checagem de `DuelOutcome::Won` consulta pra saber se há
+    /// algo a oferecer na tela de escolha. Sobrescrito a cada turno, vazio
+    /// se o script não define nenhuma `func`.
+    last_run_funcs: Vec<String>,
+    /// `true` enquanto a tela de escolha pós-vitória está sobreposta —
+    /// mesmo padrão modal de `show_load_menu`/`show_rehearsal` (bloqueia o
+    /// resto de `update()` naquele frame). Só fica `true` quando
+    /// `last_run_funcs` não estava vazio no momento da vitória (regra 2 da
+    /// RFC-030: sem `func` no script vencedor, pula direto pro destino
+    /// normal sem esta tela).
+    show_compile_choice: bool,
+    /// Nomes oferecidos na tela de escolha atual — cópia de
+    /// `last_run_funcs` tirada no instante da vitória (regra 5: no máximo 1
+    /// destes vira `save.compiled_funcs` por vitória de fase, e a tela some
+    /// depois da primeira escolha ou de "pular").
+    compile_choice_names: Vec<String>,
 }
 
 impl DuelScene {
@@ -366,6 +384,9 @@ impl DuelScene {
             rehearsal: None,
             show_rehearsal: false,
             cycles_history: Vec::new(),
+            last_run_funcs: Vec::new(),
+            show_compile_choice: false,
+            compile_choice_names: Vec::new(),
         }
     }
 
@@ -406,6 +427,27 @@ impl DuelScene {
         let w = WIDTH * 0.6;
         let y = 110.0 + index as f32 * 64.0;
         Rect::new(x, y, w, 56.0)
+    }
+
+    /// RFC-030 regra 2: retângulo do cartão `index` na tela de escolha
+    /// pós-vitória -- mesmo raciocínio de `load_card_rect` acima (clique em
+    /// `update` e desenho em `draw_compile_choice_overlay` nunca podem
+    /// divergir).
+    fn compile_choice_card_rect(index: usize) -> Rect {
+        let x = WIDTH * 0.2;
+        let w = WIDTH * 0.6;
+        let y = 130.0 + index as f32 * 64.0;
+        Rect::new(x, y, w, 56.0)
+    }
+
+    /// Cartão "PULAR" (nenhuma func compilada), sempre logo abaixo do
+    /// último cartão de nome -- `names_len` desloca sua posição pra nunca
+    /// sobrepor os cartões de nome acima dele.
+    fn compile_choice_skip_rect(names_len: usize) -> Rect {
+        let x = WIDTH * 0.2;
+        let w = WIDTH * 0.6;
+        let y = 130.0 + names_len as f32 * 64.0 + 16.0;
+        Rect::new(x, y, w, 48.0)
     }
 
     pub fn update(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &mut SaveData) -> Option<DuelOutcome> {
@@ -500,6 +542,40 @@ impl DuelScene {
             return None;
         }
 
+        // RFC-030 regra 2: a tela de escolha pós-vitória consome o frame
+        // inteiro, mesmo padrão modal de `show_load_menu`/`show_rehearsal`
+        // acima -- só sai daqui escolhendo uma func (clique num cartão) ou
+        // pulando (ESC ou o cartão "PULAR"), e só então devolve o
+        // `DuelOutcome::Won` que ficou pendente desde o fim do turno que
+        // matou o monstro.
+        if self.show_compile_choice {
+            if is_key_pressed(KeyCode::Escape) {
+                self.show_compile_choice = false;
+                return Some(DuelOutcome::Won);
+            }
+            if is_mouse_button_pressed(MouseButton::Left) {
+                for (i, name) in self.compile_choice_names.iter().enumerate() {
+                    if Self::compile_choice_card_rect(i).contains(mouse) {
+                        // regra 4: a isenção é por nome -- se este nome já
+                        // estava compilado (ex.: o jogador redefiniu e
+                        // venceu de novo escolhendo o mesmo nome), não
+                        // duplica a entrada no save.
+                        if !save.compiled_funcs.iter().any(|compiled| compiled == name) {
+                            save.compiled_funcs.push(name.clone());
+                            self.log.push((format!("Funcao '{name}' compilada -- chamadas futuras dela sao de graca."), theme::OURO));
+                        }
+                        self.show_compile_choice = false;
+                        return Some(DuelOutcome::Won);
+                    }
+                }
+                if Self::compile_choice_skip_rect(self.compile_choice_names.len()).contains(mouse) {
+                    self.show_compile_choice = false;
+                    return Some(DuelOutcome::Won);
+                }
+            }
+            return None;
+        }
+
         let writing = matches!(self.phase, Phase::Writing | Phase::Error(_));
         if writing {
             for (i, cmd) in COMMANDS.iter().enumerate() {
@@ -567,6 +643,18 @@ impl DuelScene {
                         // revelado. Nenhuma regra de combate muda — só o
                         // momento em que a cena comunica o resultado.
                         if !monster.alive() {
+                            // RFC-030 regra 2: só oferece a tela de escolha
+                            // se o script que venceu definiu pelo menos uma
+                            // `func` -- `last_run_funcs` foi gravado em
+                            // `run_script`, antes de `self.editor.clear()`
+                            // apagar o texto do turno vencedor. Sem
+                            // nenhuma func, pula direto pro `Won` normal,
+                            // sem forcar nada (não-objetivo 2 da RFC).
+                            if !self.last_run_funcs.is_empty() {
+                                self.compile_choice_names = std::mem::take(&mut self.last_run_funcs);
+                                self.show_compile_choice = true;
+                                return None;
+                            }
                             return Some(DuelOutcome::Won);
                         }
                         if player.life_points <= 0 {
@@ -622,11 +710,20 @@ impl DuelScene {
             }
         };
 
-        // RFC-027: `vm::simulate_turn` é a mesma rotina que
-        // `script::rehearsal::rehearse` chama sobre um clone — extraída pra
-        // que o turno real e o Ensaio nunca divirjam na progressão de
-        // carga/postura/consumo de carga especial.
-        let result = vm::simulate_turn(
+        // RFC-030 regra 2: guarda os nomes de `func` deste script antes de
+        // `self.editor.clear()` (mais abaixo, quando os eventos do turno
+        // terminam de tocar) apagar o texto -- é o que a checagem de
+        // `DuelOutcome::Won` consulta pra decidir se mostra a tela de
+        // escolha.
+        self.last_run_funcs = vm::defined_func_names(&program);
+
+        // RFC-027: `vm::simulate_turn_with_compiled_funcs` é a mesma rotina
+        // que `script::rehearsal::rehearse_with_compiled_funcs` chama sobre
+        // um clone — extraída pra que o turno real e o Ensaio nunca
+        // divirjam na progressão de carga/postura/consumo de carga
+        // especial. RFC-030: passa `save.compiled_funcs` pra que uma func
+        // já compilada não cobre `USER_CALL_COST` de novo neste turno.
+        let result = vm::simulate_turn_with_compiled_funcs(
             &program,
             &mut self.player_vars,
             monster,
@@ -635,6 +732,7 @@ impl DuelScene {
             Some(&save.loadout),
             save.player_class,
             Some(&save.bag),
+            &save.compiled_funcs,
         );
 
         match result {
@@ -670,7 +768,7 @@ impl DuelScene {
                 return;
             }
         };
-        let report = rehearsal::rehearse(
+        let report = rehearsal::rehearse_with_compiled_funcs(
             &program,
             &self.player_vars,
             player.life_points,
@@ -679,6 +777,7 @@ impl DuelScene {
             Some(&save.loadout),
             save.player_class,
             Some(&save.bag),
+            &save.compiled_funcs,
         );
         self.rehearsal = Some(report);
         self.show_rehearsal = true;
@@ -698,7 +797,7 @@ impl DuelScene {
             Ok(p) => p,
             Err(e) => return LiveCheck::Invalid(e),
         };
-        match vm::probe_turn_with_bag(
+        match vm::probe_turn_with_compiled_funcs(
             &program,
             player_vars,
             monster.spec.cycle_budget,
@@ -711,6 +810,7 @@ impl DuelScene {
             Some(&save.loadout),
             save.player_class,
             Some(&save.bag),
+            &save.compiled_funcs,
         ) {
             Ok(p) => LiveCheck::Valid { cycles_used: p.cycles_used, truncated: p.truncated },
             Err(e) => LiveCheck::Invalid(e),
@@ -733,6 +833,9 @@ impl DuelScene {
             if let Some(report) = &self.rehearsal {
                 self.draw_rehearsal_overlay(assets, report);
             }
+        }
+        if self.show_compile_choice {
+            self.draw_compile_choice_overlay(assets);
         }
     }
 
@@ -1032,6 +1135,55 @@ impl DuelScene {
                 TextParams { font: Some(&assets.font_body), font_size: 14, color: theme::POEIRA, ..Default::default() },
             );
         }
+    }
+
+    /// RFC-030 regra 2: tela de escolha pós-vitória -- reaproveita o mesmo
+    /// cartão visual/layout de `draw_load_overlay` (RFC-026) em vez de
+    /// inventar um componente novo, exatamente como a RFC pede. Um cartão
+    /// por nome de `func` do script vencedor, mais um cartão "PULAR" ao
+    /// final -- escolher "nenhuma" é sempre uma opção válida (regra 5).
+    fn draw_compile_choice_overlay(&self, assets: &Assets) {
+        draw_rectangle(0.0, 0.0, WIDTH, HEIGHT, Color::new(0.0, 0.0, 0.0, 0.7));
+
+        draw_text_ex(
+            "FASE VENCIDA - ESCOLHA 1 FUNCAO PRA COMPILAR (DE GRACA PRA SEMPRE, POR NOME) OU PULE (ESC)",
+            WIDTH * 0.2,
+            86.0,
+            TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::PAPIRO, ..Default::default() },
+        );
+        draw_text_ex(
+            "A isenção vale pra qualquer futura 'func' com este nome, mesmo redefinida.",
+            WIDTH * 0.2,
+            104.0,
+            TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::POEIRA, ..Default::default() },
+        );
+
+        let mouse: Vec2 = mouse_position().into();
+        for (i, name) in self.compile_choice_names.iter().enumerate() {
+            let r = Self::compile_choice_card_rect(i);
+            let hovered = r.contains(mouse);
+            let border = if hovered { theme::OURO } else { theme::TIJOLO };
+            draw_rectangle(r.x, r.y, r.w, r.h, theme::PEDRA);
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, border);
+            draw_text_ex(
+                format!("func {name}()"),
+                r.x + 12.0,
+                r.y + 22.0,
+                TextParams { font: Some(&assets.font_title), font_size: theme::TITLE_SM, color: theme::ESCARAVELHO, ..Default::default() },
+            );
+            draw_text_ex(
+                "compilar -- chamadas futuras deste nome custam 0 ciclo",
+                r.x + 12.0,
+                r.y + 42.0,
+                TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::POEIRA, ..Default::default() },
+            );
+        }
+
+        let skip = Self::compile_choice_skip_rect(self.compile_choice_names.len());
+        let skip_hovered = skip.contains(mouse);
+        draw_rectangle(skip.x, skip.y, skip.w, skip.h, theme::PEDRA);
+        draw_rectangle_lines(skip.x, skip.y, skip.w, skip.h, 2.0, if skip_hovered { theme::POEIRA } else { theme::TIJOLO });
+        draw_text_ex("NENHUMA (PULAR)", skip.x + 12.0, skip.y + 30.0, TextParams { font: Some(&assets.font_body), font_size: 16, color: theme::POEIRA, ..Default::default() });
     }
 
     fn draw_arena(&self, assets: &Assets, player: &Entity, monster: &MonsterState, foe_kind: Kind) {

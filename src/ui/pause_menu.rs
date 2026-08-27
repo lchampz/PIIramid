@@ -36,6 +36,14 @@ pub enum PauseAction {
 pub struct PauseOverlay {
     btn_continue: Button,
     btn_menu: Button,
+    /// Achado #7 da auditoria de QoL: um único clique em "VOLTAR AO MENU
+    /// PRINCIPAL" descartava o duelo em andamento sem aviso, um clique de
+    /// mais no painel que fica sobreposto perto de "CONTINUAR". `true`
+    /// depois do primeiro clique -- o botão muda de rótulo/estilo pra
+    /// "CONFIRMAR" (regra de dois cliques, sem modal novo, mesmo padrão de
+    /// card de perigo que `duel.rs` já usa em erro de sintaxe). Reseta ao
+    /// clicar CONTINUAR ou ao fechar/reabrir a pausa (nova `PauseOverlay`).
+    confirming_menu: bool,
 }
 
 impl PauseOverlay {
@@ -48,6 +56,19 @@ impl PauseOverlay {
         PauseOverlay {
             btn_continue: Button::new("CONTINUAR", vec2(btn_x, btn_continue_y), vec2(BTN_W, BTN_H), ButtonStyle::Primary, theme::TITLE_SM),
             btn_menu: Button::new("VOLTAR AO MENU PRINCIPAL", vec2(btn_x, btn_menu_y), vec2(BTN_W, BTN_H), ButtonStyle::Secondary, theme::TITLE_SM),
+            confirming_menu: false,
+        }
+    }
+
+    /// Achado #7: reseta a confirmação armada de "VOLTAR AO MENU" -- chamado
+    /// por `update` ao clicar CONTINUAR, e por `main.rs` sempre que `ESC`
+    /// alterna a pausa (nos dois sentidos), pra nunca deixar o botão
+    /// "pré-armado" numa reabertura futura do painel.
+    pub fn reset_confirm(&mut self) {
+        if self.confirming_menu {
+            self.confirming_menu = false;
+            self.btn_menu.label = "VOLTAR AO MENU PRINCIPAL".to_string();
+            self.btn_menu.style = ButtonStyle::Secondary;
         }
     }
 
@@ -61,10 +82,18 @@ impl PauseOverlay {
         self.btn_menu.update_hover(mouse);
 
         if self.btn_continue.clicked(mouse) {
+            self.reset_confirm();
             return Some(PauseAction::Continue);
         }
         if self.btn_menu.clicked(mouse) {
-            return Some(PauseAction::GoToMenu);
+            if self.confirming_menu {
+                return Some(PauseAction::GoToMenu);
+            }
+            self.confirming_menu = true;
+            // mesmo teto de comprimento que "VOLTAR AO MENU PRINCIPAL"
+            // (25 caracteres) já prova caber em `BTN_W`/`TITLE_SM`.
+            self.btn_menu.label = "CONFIRMAR? PERDE O TURNO".to_string();
+            self.btn_menu.style = ButtonStyle::Danger;
         }
         None
     }

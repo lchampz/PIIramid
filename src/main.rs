@@ -83,6 +83,12 @@ async fn main() {
         // frame (pausa e despausa de volta sem o jogador perceber).
         if pauseable && is_key_pressed(KeyCode::Escape) {
             paused = !paused;
+            // achado #7: ESC fecha a pausa sem passar por
+            // `PauseOverlay::update` (que só reseta a confirmação de
+            // "VOLTAR AO MENU" em clique de CONTINUAR) -- sem isto, reabrir
+            // a pausa depois de ter armado a confirmação e fechado com ESC
+            // deixaria o botão já armado, pulando o aviso na vez seguinte.
+            pause_overlay.reset_confirm();
         }
 
         let transition = if pauseable && paused {

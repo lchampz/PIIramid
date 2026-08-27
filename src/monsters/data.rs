@@ -133,21 +133,19 @@ pub fn sentinela() -> MonsterSpec {
 /// `atacar()` 4x com dano cheio) fecha o combate em bem menos turnos que o
 /// spam ingenuo de `atacar()` solto, sem invocar -- mesma disciplina de
 /// teste de ordenacao desde a RFC-011/012.
-// TODO(storyteller): nome, sala, descricao e nomes dos golpes sao
-// provisorios -- precisam de gancho de necromancia/invocacao.
 pub fn necroguardiao() -> MonsterSpec {
     MonsterSpec {
-        title: "Necroguardiao (provisorio)",
-        room: "Cripta dos Servos Sem Nome (provisorio)",
+        title: "Chabti-Mor",
+        room: "Cripta dos Chabtis Sem Nome",
         description: [
-            "Um guardiao que nao age por si -- so por quem ele convoca.",
-            "Golpe sozinho nao o alcanca; e preciso chamar reforcos duas vezes antes.",
+            "Em vida, nunca ergueu a propria mao -- so dava ordens aos chabtis.",
+            "So golpeia de verdade depois de chamar reforcos duas vezes.",
         ],
         max_life: 150,
         cycle_budget: 12,
         weakness: Weakness::ExigeInvocacaoDupla,
         base_damage: 9,
-        attack_name: "Garra do Servo (provisorio)",
-        special_attack_name: "Chamado dos Tres Mortos (provisorio)",
+        attack_name: "Punho Sem Pratica",
+        special_attack_name: "Chamado dos Tres Chabtis",
     }
 }

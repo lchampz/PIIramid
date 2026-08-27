@@ -45,11 +45,20 @@ impl GameOverScene {
         self.btn_menu.update_hover(mouse);
 
         if self.btn_restart.clicked(mouse) {
-            // RFC-002: `OverworldScene::update` já persistiu o save antes
-            // de chegar aqui (vitória ou derrota) -- recarregar do disco é
-            // o que faz "tentar de novo"/"proxima camara" manter
-            // inventario e scripts em vez de voltar para vazio.
-            return Some(Transition::GoToOverworld { save: Box::new(SaveData::load()) });
+            // RFC-002: o save já foi persistido antes de chegar aqui
+            // (vitória ou derrota) -- recarregar do disco é o que faz
+            // "tentar de novo"/"proxima camara" manter inventario e
+            // scripts em vez de voltar para vazio.
+            //
+            // B-008: até aqui isto devolvia `GoToOverworld`, que reabria o
+            // mapa livre com os 7 monstros soltos -- ou seja, qualquer
+            // derrota jogava o jogador *fora* da progressão linear da
+            // RFC-005, que é o fluxo padrão do jogo desde então. Como
+            // `save.current_phase` é a fonte de verdade da fase atual,
+            // `GoToPhase` reconstrói exatamente a fase em que o jogador
+            // estava (derrota) ou a próxima (vitória, já incrementada e
+            // salva por `PhaseScene`).
+            return Some(Transition::GoToPhase { save: Box::new(SaveData::load()) });
         }
         if self.btn_menu.clicked(mouse) {
             return Some(Transition::GoToMenu);

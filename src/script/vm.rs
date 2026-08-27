@@ -1156,6 +1156,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 mod tests {
     use super::*;
     use crate::inventory::Item as InvItem;
+    use crate::monsters::{data, MonsterSpec};
     use crate::script::parser::parse;
 
     fn run(src: &str, budget: u32, weakness: Weakness, posture: Posture) -> TurnResult {
@@ -1488,9 +1489,13 @@ mod tests {
         // inspeciona sempre e ataca so na guarda, espera na aberta. Custo
         // pior caso (postura guarda): inspecionar (3) + if (1, BRANCH_COST)
         // + atacar (2) = 6 ciclos; postura aberta: 3 + 1 + esperar (1) = 5.
-        // Orcamento calibrado (Guardiao, data.rs::guardiao()) = 10: cabe o
-        // pior caso com folga pequena (4 ciclos de bonus), sem sobra
-        // excessiva como nos outros 4 monstros (sphinx sobra 19).
+        // Orcamento fixo deste teste (10, valor original da RFC-008): cabe
+        // o pior caso com folga pequena (4 ciclos de bonus). RFC-022 depois
+        // subiu o orcamento real do bestiario (data.rs::guardiao()) para 12
+        // -- este teste mantem 10 fixo, decoupled do bestiario atual, so
+        // pra provar que o script de referencia sempre vence dentro de um
+        // orcamento apertado; o ritmo real do Aker calibrado esta em
+        // `guardiao_rhythm_within_target_range`.
         let src = "inspecionar()\nif inimigo.postura == \"guarda\":\n    atacar(espada.Bronze)\nelse:\n    esperar()\n";
         let budget = 10;
         let mut life = 150;
@@ -2329,13 +2334,15 @@ mod tests {
         // estourar o orcamento principal de nenhum monstro do bestiario
         // atual. RFC-021 recalibrou o orcamento do Zumbi (8 -> 16, ver
         // `data.rs::zombie` e a bateria de testes de ordenacao logo abaixo)
-        // para que `Weakness::Eficiencia` seja punivel de verdade -- o menor
-        // orcamento do bestiario passa a ser o do Aker, 10 ciclos.
+        // para que `Weakness::Eficiencia` seja punivel de verdade. RFC-022
+        // depois recalibrou os 7 pelo ritmo de combate -- o menor orcamento
+        // do bestiario passa a ser o da Mumia, 6 ciclos (ver
+        // `data.rs::mummy`), nao mais o do Aker (agora 12).
         let src = "invocar esqueleto:\n    atacar(espada.Ferro)\ninvocar mago_morto:\n    atacar(magia.Fogo)\natacar(espada.Ferro)\n";
         let program = parse(src).unwrap();
         // custo no orcamento principal: 2*INVOKE_COST + 1 atacar() = 4 + 2 = 6
-        let r = run_turn(&program, &mut HashMap::new(), 10, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
-        assert!(!r.truncated, "script de referencia com duas invocacoes nao pode estourar nem o menor orcamento do bestiario (Aker, 10)");
+        let r = run_turn(&program, &mut HashMap::new(), 6, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
+        assert!(!r.truncated, "script de referencia com duas invocacoes nao pode estourar nem o menor orcamento do bestiario (Mumia, 6)");
     }
 
     // --- RFC-015: selecionar() sobre a mochila ------------------------
@@ -2837,4 +2844,187 @@ mod tests {
             "a estrategia com if de postura ({correct_turns} turnos) precisa vencer em menos turnos que o spam cego ({naive_turns} turnos)"
         );
     }
+
+    // --- RFC-022: ritmo de combate — bateria permanente de 7 testes, um
+    // por monstro. O playtest gravado reportou "combate entediante" e a
+    // medição do product-manager achou a causa: Aker levava 15 turnos
+    // (orçamento 10 só cabia 1 atacar() por turno) e não havia curva de
+    // dificuldade (o 4º monstro caía em 2 turnos, o 3º levava 5). Esta
+    // bateria é a mesma disciplina de guarda permanente que a RFC-011/021
+    // estabeleceram para antijogo, agora aplicada a ritmo: cada teste roda
+    // a estratégia correta do seu monstro, turno a turno, contra os
+    // números reais de `data.rs` (nunca hardcoded — se uma RFC futura
+    // recalibrar o bestiário e reabrir um atoleiro ou um duelo trivial, é
+    // aqui que o CI acusa). Critério de aceite: `3..=6` turnos, faixa (não
+    // número exato — RFC-022, "Decisões tomadas") para sobreviver a ajuste
+    // fino futuro sem quebrar a cada tweak de dano. ---
+
+    /// Roda a estratégia correta de um monstro turno a turno contra o
+    /// `MonsterSpec` real (`crate::monsters::data`), alternando postura a
+    /// cada turno quando `toggle_posture` é verdadeiro (fraquezas cuja
+    /// condição depende dela: `ExigeGuarda`, `DuploSelo`), e devolve quantos
+    /// turnos levou pra zerar a vida. Mesmo padrão de loop dos testes de
+    /// ordenação da RFC-021 acima, só que lendo `spec.max_life`/
+    /// `spec.cycle_budget`/`spec.weakness`/`spec.base_damage` de verdade em
+    /// vez de duplicar os números inline — é isso que torna o teste uma
+    /// guarda contra recalibração futura, não só uma default fixture.
+    fn turns_to_defeat_with_spec(src: &str, spec: &MonsterSpec, toggle_posture: bool) -> u32 {
+        let mut life = spec.max_life;
+        let mut posture = Posture::Guarda;
+        let mut turns = 0;
+        while life > 0 && turns < 200 {
+            let program = parse(src).unwrap();
+            let r = run_turn(
+                &program,
+                &mut HashMap::new(),
+                spec.cycle_budget,
+                100,
+                100,
+                life,
+                spec.max_life,
+                posture,
+                spec.weakness,
+                spec.base_damage,
+                false,
+            )
+            .unwrap();
+            assert!(!r.truncated, "estrategia correta de {} nao pode estourar o orcamento calibrado ({} ciclos)", spec.title, spec.cycle_budget);
+            life = r.enemy_life;
+            if toggle_posture {
+                posture = posture.toggled();
+            }
+            turns += 1;
+        }
+        assert_eq!(life, 0, "estrategia correta precisa vencer {} dentro do orcamento calibrado", spec.title);
+        turns
+    }
+
+    #[test]
+    fn mummy_rhythm_within_target_range() {
+        // 1º da progressão, turno-alvo 3 (RFC-022). Correta: 3x
+        // atacar(magia.Fogo) — cabe exato no orçamento calibrado (6 = 3x2).
+        let spec = data::mummy();
+        let src = "atacar(magia.Fogo)\n".repeat(3);
+        let turns = turns_to_defeat_with_spec(&src, &spec, false);
+        assert!((3..=6).contains(&turns), "Mumia deveria durar 3..=6 turnos com a estrategia correta, levou {turns}");
+    }
+
+    #[test]
+    fn zombie_rhythm_within_target_range() {
+        // 2º da progressão, turno-alvo 3 (RFC-022). Correta: 3x
+        // atacar(espada.Ferro) — 6 ciclos, bem abaixo de max_ciclos=8,
+        // então nunca aciona a redução de Eficiencia.
+        let spec = data::zombie();
+        let src = "atacar(espada.Ferro)\n".repeat(3);
+        let turns = turns_to_defeat_with_spec(&src, &spec, false);
+        assert!((3..=6).contains(&turns), "Zumbi deveria durar 3..=6 turnos com a estrategia correta, levou {turns}");
+    }
+
+    #[test]
+    fn beetle_rhythm_within_target_range() {
+        // 3º da progressão, turno-alvo 4 (RFC-022). Correta: lê a postura,
+        // ataca 5x só na guarda (if custa 1 ciclo + 5x2=10 = 11, exatamente
+        // o orçamento calibrado); na aberta banca o orçamento inteiro como
+        // golpe bônus.
+        let spec = data::beetle();
+        let src = "if inimigo.postura == \"guarda\":\n".to_string() + &"    atacar(espada.Bronze)\n".repeat(5);
+        let turns = turns_to_defeat_with_spec(&src, &spec, true);
+        assert!((3..=6).contains(&turns), "Escaravelho deveria durar 3..=6 turnos com a estrategia correta, levou {turns}");
+    }
+
+    #[test]
+    fn sphinx_rhythm_within_target_range() {
+        // 4º da progressão, turno-alvo 4 (RFC-022). Correta: inspecionar()
+        // sempre, seguido de 3x atacar() — 3+3x2=9, exatamente o orçamento
+        // calibrado. RequerInspecao bloqueia 100% do dano sem inspecionar,
+        // então não há estratégia "ingênua" competitiva a comparar aqui.
+        let spec = data::sphinx();
+        let src = "inspecionar()\n".to_string() + &"atacar(espada.Bronze)\n".repeat(3);
+        let turns = turns_to_defeat_with_spec(&src, &spec, false);
+        assert!((3..=6).contains(&turns), "Esfinge deveria durar 3..=6 turnos com a estrategia correta, levou {turns}");
+    }
+
+    #[test]
+    fn guardiao_rhythm_within_target_range() {
+        // 5º da progressão (Aker), turno-alvo 5 (RFC-022) — o atoleiro de
+        // 15 turnos que motivou esta RFC. Correta: inspecionar() + if
+        // guarda, com uma sequência real de 4 ataques (não só 1) no turno
+        // de guarda — inspecionar(3) + if(1) + 4x atacar(2) = 12, exatamente
+        // o orçamento calibrado (10 -> 12, regra 2 da RFC: orçamento sobe,
+        // vida não muda).
+        let spec = data::guardiao();
+        let src = "inspecionar()\nif inimigo.postura == \"guarda\":\n".to_string()
+            + &"    atacar(espada.Bronze)\n".repeat(4)
+            + "else:\n    esperar()\n";
+        let turns = turns_to_defeat_with_spec(&src, &spec, true);
+        assert!((3..=6).contains(&turns), "Aker deveria durar 3..=6 turnos com a estrategia correta, levou {turns}");
+    }
+
+    #[test]
+    fn sentinela_rhythm_within_target_range() {
+        // 6º da progressão (Apagado), turno-alvo 5 (RFC-022). Correta: uma
+        // func nomeada com um atacar() dentro, chamada 3x — cada chamada
+        // custa USER_CALL_COST(1) + atacar(2) = 3, total 9, exatamente o
+        // orçamento calibrado.
+        let spec = data::sentinela();
+        let src = "func golpe():\n    atacar(espada.Bronze)\n\n".to_string() + &"golpe()\n".repeat(3);
+        let turns = turns_to_defeat_with_spec(&src, &spec, false);
+        assert!((3..=6).contains(&turns), "Apagado deveria durar 3..=6 turnos com a estrategia correta, levou {turns}");
+    }
+
+    #[test]
+    fn necroguardiao_rhythm_within_target_range() {
+        // 7º e último da progressão (Chabti-Mor), turno-alvo 6 — o mais
+        // longo, fechando a curva crescente (RFC-022). Correta: 2x invocar
+        // (2*INVOKE_COST=4) + 2x atacar (4) = 8, exatamente o orçamento
+        // calibrado.
+        let spec = data::necroguardiao();
+        let src = "invocar a:\n    esperar()\ninvocar b:\n    esperar()\n".to_string() + &"atacar(espada.Bronze)\n".repeat(2);
+        let turns = turns_to_defeat_with_spec(&src, &spec, false);
+        assert!((3..=6).contains(&turns), "Chabti-Mor deveria durar 3..=6 turnos com a estrategia correta, levou {turns}");
+    }
+
+    #[test]
+    fn rhythm_curve_is_non_decreasing_across_the_seven_phases() {
+        // RFC-022 critério de aceite: a curva de turnos precisa ser
+        // crescente ou plana ao longo das 7 fases, na ordem de introdução
+        // (`monsters::PHASES`, RFC-005 — nunca reordenada por dificuldade).
+        // Reusa exatamente os mesmos 7 scripts de referência dos testes
+        // acima para não divergir da definição de "estratégia correta" de
+        // cada monstro.
+        let mummy_turns = turns_to_defeat_with_spec(&"atacar(magia.Fogo)\n".repeat(3), &data::mummy(), false);
+        let zombie_turns = turns_to_defeat_with_spec(&"atacar(espada.Ferro)\n".repeat(3), &data::zombie(), false);
+        let beetle_turns = turns_to_defeat_with_spec(
+            &("if inimigo.postura == \"guarda\":\n".to_string() + &"    atacar(espada.Bronze)\n".repeat(5)),
+            &data::beetle(),
+            true,
+        );
+        let sphinx_turns =
+            turns_to_defeat_with_spec(&("inspecionar()\n".to_string() + &"atacar(espada.Bronze)\n".repeat(3)), &data::sphinx(), false);
+        let guardiao_turns = turns_to_defeat_with_spec(
+            &("inspecionar()\nif inimigo.postura == \"guarda\":\n".to_string() + &"    atacar(espada.Bronze)\n".repeat(4) + "else:\n    esperar()\n"),
+            &data::guardiao(),
+            true,
+        );
+        let sentinela_turns =
+            turns_to_defeat_with_spec(&("func golpe():\n    atacar(espada.Bronze)\n\n".to_string() + &"golpe()\n".repeat(3)), &data::sentinela(), false);
+        let necroguardiao_turns = turns_to_defeat_with_spec(
+            &("invocar a:\n    esperar()\ninvocar b:\n    esperar()\n".to_string() + &"atacar(espada.Bronze)\n".repeat(2)),
+            &data::necroguardiao(),
+            false,
+        );
+
+        let curve = [mummy_turns, zombie_turns, beetle_turns, sphinx_turns, guardiao_turns, sentinela_turns, necroguardiao_turns];
+        for pair in curve.windows(2) {
+            assert!(
+                pair[0] <= pair[1],
+                "curva de ritmo precisa ser crescente ou plana entre fases consecutivas, achei {:?} (fase anterior {} > fase seguinte {})",
+                curve,
+                pair[0],
+                pair[1]
+            );
+        }
+    }
 }
+
+

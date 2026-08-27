@@ -92,11 +92,17 @@ impl GameOverScene {
         let subtitle = format!("TURNO {:02}", self.turns);
         draw_text_ex(&subtitle, card_x + 44.0, card_y + 46.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::POEIRA, ..Default::default() });
 
-        let title = if self.won { "CAMARA LIMPA" } else { "VOCE CAIU" };
+        // achado #8 da auditoria de QoL: apos a RFC-005, `won: true` so
+        // chega aqui quando `current_phase >= PHASES.len()` -- vitoria
+        // intermediaria vai direto pro Menu (`phase.rs`), sem passar por
+        // esta tela. O texto antigo ("o corredor segue adiante") falava de
+        // uma vitoria no meio do caminho que nao existe mais -- essa tela
+        // e sempre a Sentenca Eterna encerrada de verdade, fim da piramide.
+        let title = if self.won { "SENTENCA CUMPRIDA" } else { "VOCE CAIU" };
         draw_text_ex(title, card_x + 44.0, card_y + 100.0, TextParams { font: Some(&assets.font_title), font_size: theme::TITLE_LG, color: accent, ..Default::default() });
 
         let flavor = if self.won {
-            "O monstro desmorona. O corredor segue adiante, mais escuro."
+            "O ultimo guardiao desmorona. A Sentenca Eterna reconhece sua escrita - a piramide se abre."
         } else {
             "Seu roteiro travou no ultimo ciclo. A piramide guarda seus papiros - e seu corpo."
         };

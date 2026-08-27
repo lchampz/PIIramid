@@ -167,6 +167,13 @@ pub struct SaveData {
     /// "item ausente nunca é erro").
     #[serde(default)]
     pub player_class: Option<PlayerClass>,
+    /// Índice da próxima fase a enfrentar (RFC-005 regra 2). `0` = primeira
+    /// fase. `#[serde(default)]`: um save gravado antes desta RFC não tem
+    /// essa chave no JSON — desserializa como `0`, não falha (mesmo padrão
+    /// de `player_class` acima). `>= monsters::PHASES.len()` (7 hoje)
+    /// significa "todas as fases vencidas" — vitória completa da pirâmide.
+    #[serde(default)]
+    pub current_phase: usize,
 }
 
 const SAVE_FILE_NAME: &str = "piiramid_save.json";
@@ -228,6 +235,7 @@ mod tests {
             ]),
             scripts: vec![SavedScript { name: "abre-fogo.pii".into(), body: "atacar(magia.Fogo)\ndefender(escudo.Bronze)".into() }],
             player_class: None,
+            current_phase: 0,
         }
     }
 
@@ -298,6 +306,31 @@ mod tests {
         let json = r#"{"loadout":{"arma":null,"magia":null,"escudo":null,"pocao":null},"bag":[],"scripts":[]}"#;
         let loaded: SaveData = serde_json::from_str(json).expect("save antigo sem player_class deve desserializar");
         assert_eq!(loaded.player_class, None);
+    }
+
+    #[test]
+    fn default_save_starts_at_phase_zero() {
+        assert_eq!(SaveData::default().current_phase, 0);
+    }
+
+    #[test]
+    fn save_json_without_current_phase_field_deserializes_as_zero() {
+        // Simula um save gravado antes da RFC-005: o JSON nao tem a chave
+        // "current_phase" -- #[serde(default)] precisa cobrir esse caso sem
+        // falhar (regra 2 da RFC-005), mesmo padrao de player_class acima.
+        let json = r#"{"loadout":{"arma":null,"magia":null,"escudo":null,"pocao":null},"bag":[],"scripts":[],"player_class":null}"#;
+        let loaded: SaveData = serde_json::from_str(json).expect("save antigo sem current_phase deve desserializar");
+        assert_eq!(loaded.current_phase, 0);
+    }
+
+    #[test]
+    fn save_data_with_current_phase_round_trips() {
+        let mut data = sample();
+        data.current_phase = 3;
+        let json = serde_json::to_string(&data).expect("serializar SaveData com fase");
+        let back: SaveData = serde_json::from_str(&json).expect("desserializar SaveData com fase");
+        assert_eq!(back.current_phase, 3);
+        assert_eq!(data, back);
     }
 
     #[test]

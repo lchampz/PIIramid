@@ -19,6 +19,7 @@ use scenes::gameover::GameOverScene;
 use scenes::grimoire::GrimoireScene;
 use scenes::menu::MenuScene;
 use scenes::overworld::OverworldScene;
+use scenes::phase::PhaseScene;
 use scenes::style_guide::StyleGuideScene;
 use scenes::Transition;
 use ui::pause_menu::{PauseAction, PauseOverlay};
@@ -26,6 +27,11 @@ use ui::pause_menu::{PauseAction, PauseOverlay};
 enum Scene {
     Menu(MenuScene),
     Overworld(Box<OverworldScene>),
+    /// RFC-005: fluxo padrão de duelo (substitui `Overworld` no menu, que
+    /// fica só pro debug). Variante própria, não um caso dentro de
+    /// `Overworld` — não há mapa/movimento por baixo pra reaproveitar a
+    /// estrutura `duel: Option<(usize, DuelScene)>` de `OverworldScene`.
+    Phase(Box<PhaseScene>),
     GameOver(GameOverScene),
     Grimoire(Box<GrimoireScene>),
     StyleGuide(StyleGuideScene),
@@ -54,17 +60,23 @@ async fn main() {
     let mut pause_overlay = PauseOverlay::new();
 
     loop {
-        let in_overworld = matches!(scene, Scene::Overworld(_));
+        // RFC-019 original: pausa só existia em `Scene::Overworld`. RFC-005
+        // troca o fluxo padrão do jogador por `Scene::Phase` (duelo direto,
+        // sem mapa) -- sem estender esta checagem, a pausa continuaria
+        // "funcionando" só para quem entra pelo item de menu de debug, e
+        // quebraria silenciosamente para todo mundo que joga o fluxo normal
+        // (exatamente o risco que a RFC-005 pede pra não deixar acontecer).
+        let pauseable = matches!(scene, Scene::Overworld(_) | Scene::Phase(_));
 
         // RFC-019 regra 2: único lugar que lê `ESC` para pausa -- alterna.
         // `PauseOverlay::update` (abaixo) nunca lê `ESC`, só clique nos
         // botões, senão o mesmo toggle aconteceria duas vezes no mesmo
         // frame (pausa e despausa de volta sem o jogador perceber).
-        if in_overworld && is_key_pressed(KeyCode::Escape) {
+        if pauseable && is_key_pressed(KeyCode::Escape) {
             paused = !paused;
         }
 
-        let transition = if in_overworld && paused {
+        let transition = if pauseable && paused {
             // RFC-019 regra 3: `OverworldScene::update()` não é chamado
             // enquanto pausado -- é isto que congela o jogo de verdade
             // (nenhum monstro anima, nenhum turno de duelo avança).
@@ -80,6 +92,7 @@ async fn main() {
             match &mut scene {
                 Scene::Menu(s) => s.update(),
                 Scene::Overworld(s) => s.update(),
+                Scene::Phase(s) => s.update(),
                 Scene::GameOver(s) => s.update(),
                 Scene::Grimoire(s) => s.update(),
                 Scene::StyleGuide(s) => s.update(),
@@ -89,6 +102,7 @@ async fn main() {
         if let Some(t) = transition {
             match t {
                 Transition::GoToOverworld { save } => scene = Scene::Overworld(Box::new(OverworldScene::new(*save))),
+                Transition::GoToPhase { save } => scene = Scene::Phase(Box::new(PhaseScene::new(*save))),
                 Transition::GoToGameOver { won, turns, player_hp } => scene = Scene::GameOver(GameOverScene::new(won, turns, player_hp)),
                 Transition::GoToMenu => scene = Scene::Menu(MenuScene::new(&assets)),
                 Transition::GoToGrimoire => scene = Scene::Grimoire(Box::new(GrimoireScene::new())),
@@ -103,6 +117,7 @@ async fn main() {
         match &scene {
             Scene::Menu(s) => s.draw(&assets),
             Scene::Overworld(s) => s.draw(&assets),
+            Scene::Phase(s) => s.draw(&assets),
             Scene::GameOver(s) => s.draw(&assets),
             Scene::Grimoire(s) => s.draw(&assets),
             Scene::StyleGuide(s) => s.draw(&assets),
@@ -110,7 +125,7 @@ async fn main() {
 
         // RFC-019 regra 3: `draw()` da cena continua rodando por baixo do
         // véu -- só o desenho da sobreposição é condicional.
-        if in_overworld && paused {
+        if pauseable && paused {
             pause_overlay.draw(&assets);
         }
 

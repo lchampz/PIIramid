@@ -4,6 +4,24 @@
 
 pub mod data;
 
+use crate::world::entity::Kind;
+
+/// RFC-005 regra 1: registro central e único da ordem dos 7 monstros/fases
+/// — nem `OverworldScene` (que ainda os espalha manualmente pelo mapa,
+/// intocado) nem `PhaseScene` (que só lê daqui) duplicam essa ordem. É a
+/// mesma ordem de introdução já implícita no bestiário (Múmia, Zumbi,
+/// Escaravelho, Esfinge, Aker, Apagado, Chabti-Mor) — RFC-005 não-objetivo 3
+/// proíbe reordenar por dificuldade aqui.
+pub const PHASES: [(Kind, fn() -> MonsterSpec); 7] = [
+    (Kind::Mummy, data::mummy),
+    (Kind::Zombie, data::zombie),
+    (Kind::Beetle, data::beetle),
+    (Kind::Sphinx, data::sphinx),
+    (Kind::Guardiao, data::guardiao),
+    (Kind::Sentinela, data::sentinela),
+    (Kind::Necroguardiao, data::necroguardiao),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Element {
     Fogo,

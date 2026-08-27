@@ -14,14 +14,18 @@ const LEFT_W: f32 = 620.0;
 
 /// Ação de cada item do menu, mais leve que `Transition` (que agora carrega
 /// `SaveData` — RFC-002). `items()` roda todo frame só pra detectar hover;
-/// construir `Transition::GoToOverworld` ali significaria ler/zerar o save
-/// a cada frame com o menu aberto. A leitura de disco só acontece dentro de
-/// `resolve()`, chamada uma única vez, no clique.
+/// construir `Transition::GoToPhase`/`GoToOverworld` ali significaria
+/// ler/zerar o save a cada frame com o menu aberto. A leitura de disco só
+/// acontece dentro de `resolve()`, chamada uma única vez, no clique.
 #[derive(Clone, Copy)]
 enum MenuAction {
-    /// RFC-002, regra 4: "Nova Expedição" -> save vazio; "Continuar" ->
-    /// save carregado do disco (ou vazio, se ausente/corrompido).
-    Overworld { fresh: bool },
+    /// RFC-002, regra 4 (agora endereçado a `GoToPhase` — RFC-005 regra 6):
+    /// "Nova Expedição" -> save vazio; "Continuar" -> save carregado do
+    /// disco (ou vazio, se ausente/corrompido).
+    Phase { fresh: bool },
+    /// RFC-005 regra 6: mapa livre, só em build debug -- `GoToOverworld`
+    /// continua intocado, só deixa de ser o caminho padrão do menu.
+    DebugOverworld,
     Grimoire,
     StyleGuide,
     Quit,
@@ -30,10 +34,11 @@ enum MenuAction {
 impl MenuAction {
     fn resolve(self) -> Transition {
         match self {
-            MenuAction::Overworld { fresh } => {
+            MenuAction::Phase { fresh } => {
                 let save = if fresh { SaveData::default() } else { SaveData::load() };
-                Transition::GoToOverworld { save: Box::new(save) }
+                Transition::GoToPhase { save: Box::new(save) }
             }
+            MenuAction::DebugOverworld => Transition::GoToOverworld { save: Box::new(SaveData::load()) },
             MenuAction::Grimoire => Transition::GoToGrimoire,
             MenuAction::StyleGuide => Transition::GoToStyleGuide,
             MenuAction::Quit => Transition::Quit,
@@ -57,13 +62,21 @@ impl MenuScene {
     }
 
     fn items() -> Vec<MenuItem> {
-        vec![
-            MenuItem { key: "01", label: "NOVA EXPEDICAO", action: Some(MenuAction::Overworld { fresh: true }) },
-            MenuItem { key: "02", label: "CONTINUAR", action: Some(MenuAction::Overworld { fresh: false }) },
+        let mut items = vec![
+            MenuItem { key: "01", label: "NOVA EXPEDICAO", action: Some(MenuAction::Phase { fresh: true }) },
+            MenuItem { key: "02", label: "CONTINUAR", action: Some(MenuAction::Phase { fresh: false }) },
             MenuItem { key: "03", label: "GRIMORIO", action: Some(MenuAction::Grimoire) },
             MenuItem { key: "04", label: "GUIA DE ESTILO", action: Some(MenuAction::StyleGuide) },
-            MenuItem { key: "05", label: "SAIR DA PIRAMIDE", action: Some(MenuAction::Quit) },
-        ]
+        ];
+        // RFC-005 regra 6: mapa livre acessível só em build debug, pra
+        // testar uma câmara específica sem jogar a sequência inteira. Não
+        // aparece em `cargo build --release` -- `#[cfg(debug_assertions)]`
+        // é o mecanismo padrão do Rust pra isso, nenhuma flag própria.
+        #[cfg(debug_assertions)]
+        items.push(MenuItem { key: "05", label: "MAPA (DEBUG)", action: Some(MenuAction::DebugOverworld) });
+        let quit_key = if cfg!(debug_assertions) { "06" } else { "05" };
+        items.push(MenuItem { key: quit_key, label: "SAIR DA PIRAMIDE", action: Some(MenuAction::Quit) });
+        items
     }
 
     fn item_rect(index: usize) -> Rect {

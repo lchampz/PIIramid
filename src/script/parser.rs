@@ -556,6 +556,28 @@ impl Parser {
 mod tests {
     use super::*;
 
+    /// RFC-018 — reproduz literalmente o script do playtest gravado
+    /// ("QUANDO DIGITO AS SETA", frase em português digitada pelo jogador,
+    /// que o vídeo mostra com a barra em "SINTAXE OK" o tempo todo).
+    /// `parser::parse` sozinho ACEITA esse texto (cada palavra vira um
+    /// `Stmt::Expr(Ident(..))` solto — a gramática não exige que uma
+    /// expressão solta faça sentido semântico) — é a passada de validação
+    /// da VM, que `compute_live_check` (`scenes/duel.rs`) chama depois do
+    /// parse, que rejeita, porque nenhuma dessas "variáveis" existe. Este
+    /// teste prova que a validação ao vivo *completa* (parse + probe, não
+    /// só parse) pega exatamente o caso relatado.
+    #[test]
+    fn video_repro_quando_digito_as_seta_is_rejected_by_live_validation() {
+        use crate::monsters::{Element, Posture, Weakness};
+        use crate::script::vm::probe_turn_with_bag;
+        use std::collections::HashMap;
+
+        let program = parse("QUANDO DIGITO AS SETA\n").unwrap();
+        let vars = HashMap::new();
+        let err = probe_turn_with_bag(&program, &vars, 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), None, None, None);
+        assert!(err.is_err(), "validacao ao vivo tinha que rejeitar 'QUANDO DIGITO AS SETA', igual ao relatado no video");
+    }
+
     /// Zera os números de linha recursivamente — a comparação de AST entre
     /// os dois estilos de bloco deve ignorar em que linha física cada um
     /// caiu, só a *forma* da árvore importa.

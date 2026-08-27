@@ -314,10 +314,11 @@ pub fn run_turn_with_bag(
     // sobre `vars`. RFC-010 regra 2: opera sobre um *clone* do mapa do
     // jogador, nunca sobre o original, senão uma escrita de variável
     // vazaria do dry-run para o estado real mesmo quando o script trunca
-    // antes de chegar lá de verdade na passada de verdade.
-    let mut probe_vars = vars.clone();
-    let mut probe = Vm::new(
-        &mut probe_vars,
+    // antes de chegar lá de verdade na passada de verdade. Reaproveita
+    // `probe_pass` (RFC-018) em vez de repetir a lógica aqui.
+    probe_pass(
+        program,
+        vars,
         cycle_budget,
         player_life,
         player_max_life,
@@ -326,16 +327,10 @@ pub fn run_turn_with_bag(
         enemy_posture,
         enemy_weakness,
         funcs.clone(),
-        true,
         loadout,
         player_class,
         bag,
-    );
-    match probe.exec_program(program) {
-        Ok(()) => {}
-        Err(Signal::Truncated { .. }) => {} // ok: a segunda passada vai truncar do mesmo jeito
-        Err(Signal::Error(e)) => return Err(e),
-    }
+    )?;
 
     // segunda passada: roda de verdade, escrevendo no `vars` emprestado
     // (RFC-010 regra 1/3) — é isso que faz uma variável sobreviver ao
@@ -401,6 +396,106 @@ pub fn run_turn_with_bag(
         player_life: vm.player_life,
         enemy_life: vm.enemy_life,
     })
+}
+
+/// Resultado de uma passada de **validação apenas** (RFC-018): nenhum
+/// efeito colateral real (vida, contra-ataque, golpe bônus, `vars` do
+/// chamador) — só o que a barra de ciclos da tela de duelo precisa pra
+/// mostrar um número honesto antes do jogador apertar EXECUTAR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProbeResult {
+    pub cycles_used: u32,
+    /// Estourar o orçamento durante a validação ao vivo não é erro (RFC-018
+    /// regra 4) — só informa pra a UI colorir a barra de alerta, do mesmo
+    /// jeito que `over` já faz hoje.
+    pub truncated: bool,
+}
+
+/// Passada de validação compartilhada entre `run_turn_with_bag` (que a usa
+/// como primeira das suas duas passadas) e `probe_turn_with_bag` (RFC-018,
+/// que expõe só isso pra validação ao vivo). Sempre opera sobre um *clone*
+/// de `vars` — nunca sobre o mapa do chamador (mesma disciplina da
+/// RFC-010): mesmo quando o chamador só tem um clone descartável, clonar
+/// de novo aqui mantém uma única lógica de dry-run em vez de duas cópias
+/// divergentes.
+#[allow(clippy::too_many_arguments)]
+fn probe_pass(
+    program: &[Stmt],
+    vars: &HashMap<String, Value>,
+    cycle_budget: u32,
+    player_life: i32,
+    player_max_life: i32,
+    enemy_life: i32,
+    enemy_max_life: i32,
+    enemy_posture: Posture,
+    enemy_weakness: Weakness,
+    funcs: HashMap<String, Vec<Stmt>>,
+    loadout: Option<&Loadout>,
+    player_class: Option<PlayerClass>,
+    bag: Option<&Bag>,
+) -> Result<ProbeResult, ScriptError> {
+    let mut probe_vars = vars.clone();
+    let mut probe = Vm::new(
+        &mut probe_vars,
+        cycle_budget,
+        player_life,
+        player_max_life,
+        enemy_life,
+        enemy_max_life,
+        enemy_posture,
+        enemy_weakness,
+        funcs,
+        true,
+        loadout,
+        player_class,
+        bag,
+    );
+    match probe.exec_program(program) {
+        Ok(()) => Ok(ProbeResult { cycles_used: probe.cycles_used, truncated: false }),
+        Err(Signal::Truncated { .. }) => Ok(ProbeResult { cycles_used: probe.cycles_used, truncated: true }),
+        Err(Signal::Error(e)) => Err(e),
+    }
+}
+
+/// Validação ao vivo (RFC-018): mesma passada `dry_run` que
+/// `run_turn_with_bag` já roda internamente como primeira passada, exposta
+/// aqui sozinha — sem a segunda passada real — pra tela de duelo poder
+/// mostrar sintaxe/ciclos honestos a cada frame sem pagar o custo de rodar
+/// a VM duas vezes a mais (a real e a dry-run dela) por chamada. `vars` é
+/// só lido: o clone interno de `probe_pass` garante que o mapa do jogador
+/// nunca é mutado por uma validação ao vivo, não importa quantas rodem
+/// sem o jogador apertar EXECUTAR.
+#[allow(clippy::too_many_arguments)]
+pub fn probe_turn_with_bag(
+    program: &[Stmt],
+    vars: &HashMap<String, Value>,
+    cycle_budget: u32,
+    player_life: i32,
+    player_max_life: i32,
+    enemy_life: i32,
+    enemy_max_life: i32,
+    enemy_posture: Posture,
+    enemy_weakness: Weakness,
+    loadout: Option<&Loadout>,
+    player_class: Option<PlayerClass>,
+    bag: Option<&Bag>,
+) -> Result<ProbeResult, ScriptError> {
+    let funcs = collect_funcs(program)?;
+    probe_pass(
+        program,
+        vars,
+        cycle_budget,
+        player_life,
+        player_max_life,
+        enemy_life,
+        enemy_max_life,
+        enemy_posture,
+        enemy_weakness,
+        funcs,
+        loadout,
+        player_class,
+        bag,
+    )
 }
 
 impl<'a> Vm<'a> {
@@ -942,27 +1037,47 @@ impl<'a> Vm<'a> {
         (base + self.item_bonus(item), effective)
     }
 
+    // RFC-021: das 7 fraquezas, só `RequerInspecao` bloqueava dano por
+    // completo -- as outras 6 reduziam mas nunca bloqueavam, e o usuário
+    // decidiu que "reduz" precisava doer bem mais sem virar bloqueio total
+    // (meio-termo, não uniformizar tudo pra 0). `DuploSelo` já usava `/8`
+    // desde a RFC-011; esta RFC estende o mesmo divisor (não um valor novo
+    // chutado) às outras 5 reduções (`Elemento`, `Eficiencia`, `ExigeGuarda`,
+    // `ExigeNomeacao`, `ExigeInvocacaoDupla`), calibradas de novo pela
+    // bateria de testes de ordenação logo abaixo (`mod tests`).
     fn resolve_attack_by_weakness(&self, item: &Item) -> (i32, bool) {
         match self.enemy_weakness {
             Weakness::Elemento(elem) => {
                 if Element::from_name(&item.name) == elem {
                     (BASE_ATTACK_DAMAGE, true)
                 } else {
-                    (BASE_ATTACK_DAMAGE / 3, false)
+                    (BASE_ATTACK_DAMAGE / 8, false)
                 }
             }
             Weakness::Eficiencia { max_ciclos } => {
                 if self.cycles_used <= max_ciclos {
                     (BASE_ATTACK_DAMAGE, true)
                 } else {
-                    (BASE_ATTACK_DAMAGE / 4, false)
+                    (BASE_ATTACK_DAMAGE / 8, false)
                 }
             }
+            // RFC-021: ao contrário das outras 5 fraquezas reduzidas, a
+            // condição de `ExigeGuarda` é *ambiente* (a postura alterna
+            // sozinha a cada turno, `Posture::toggled`) em vez de exigir uma
+            // ação do jogador -- um script que nunca lê `inimigo.postura`
+            // ainda acerta dano cheio em ~metade dos turnos, de graça, só
+            // por sorte de postura. Isso limita estruturalmente o quanto
+            // qualquer divisor consegue punir (ver
+            // `beetle_naive_spam_never_beats_posture_branch` e a nota do
+            // gamedev na entrega desta RFC) -- `/8` ainda é o divisor certo
+            // (mesmo piso `> 0` das outras), só que a margem prática exige
+            // recalibrar vida/orçamento do Escaravelho (`data.rs::beetle`),
+            // não o divisor em si.
             Weakness::ExigeGuarda => {
                 if self.enemy_posture == Posture::Guarda {
                     (BASE_ATTACK_DAMAGE, true)
                 } else {
-                    (BASE_ATTACK_DAMAGE / 4, false)
+                    (BASE_ATTACK_DAMAGE / 8, false)
                 }
             }
             Weakness::RequerInspecao => {
@@ -993,33 +1108,34 @@ impl<'a> Vm<'a> {
             // `self.depth` (RFC-006) sobe antes do corpo de uma `func`
             // rodar e desce depois (`eval_user_call`) -- lido aqui sem
             // campo novo, exatamente como a regra 1 da RFC pede. Divisor
-            // calibrado (não chutado) pelo teste de ordenação
-            // `exige_nomeacao_named_func_beats_naive_spam_in_fewer_turns`
-            // em vez de copiado de outra fraqueza: /4 faz a estrategia
-            // ingenua (atacar() repetido no nivel superior) perder em
-            // turnos com margem clara, nunca empatar raso, contra a
+            // recalibrado pela RFC-021 (`/4` -> `/8`, mesmo valor das
+            // outras reduções agora) e reverificado pelo teste de ordenação
+            // `exige_nomeacao_named_func_beats_naive_spam_in_fewer_turns`:
+            // a estrategia ingenua (atacar() repetido no nivel superior)
+            // continua perdendo em turnos com margem clara contra a
             // estrategia correta (mesmo atacar(), de dentro de uma func).
             Weakness::ExigeNomeacao => {
                 if self.depth > 0 {
                     (BASE_ATTACK_DAMAGE, true)
                 } else {
-                    (BASE_ATTACK_DAMAGE / 4, false)
+                    (BASE_ATTACK_DAMAGE / 8, false)
                 }
             }
             // RFC-017: le `self.invocations_this_turn` (RFC-004, campo ja
             // existente, incrementado em `exec_invoke`) sem estado novo.
             // Nao importa se o atacar() decisivo veio de dentro ou de fora
             // de uma invocacao (nao-objetivo 4) -- so que 2 ja tenham
-            // rodado no turno. Divisor calibrado (nao copiado) pelo teste
-            // de ordenacao `exige_invocacao_dupla_beats_naive_spam_in_fewer_turns`:
-            // /4 faz o spam ingenuo (atacar() repetido, sem invocar) perder
-            // com margem clara contra a estrategia correta (2 invocacoes +
-            // atacar()), mesma disciplina da RFC-011/012.
+            // rodado no turno. Divisor recalibrado pela RFC-021 (`/4` ->
+            // `/8`) e reverificado pelo teste de ordenacao
+            // `exige_invocacao_dupla_beats_naive_spam_in_fewer_turns`: o
+            // spam ingenuo (atacar() repetido, sem invocar) continua
+            // perdendo com margem clara contra a estrategia correta (2
+            // invocacoes + atacar()), mesma disciplina da RFC-011/012.
             Weakness::ExigeInvocacaoDupla => {
                 if self.invocations_this_turn >= api::MAX_INVOCATIONS_PER_TURN {
                     (BASE_ATTACK_DAMAGE, true)
                 } else {
-                    (BASE_ATTACK_DAMAGE / 4, false)
+                    (BASE_ATTACK_DAMAGE / 8, false)
                 }
             }
         }
@@ -1076,7 +1192,7 @@ mod tests {
         match &r.events[0] {
             TurnEvent::Attacked { effective, damage, .. } => {
                 assert!(!*effective);
-                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 3);
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 8); // RFC-021: /3 -> /8
             }
             other => panic!("evento inesperado: {other:?}"),
         }
@@ -1290,21 +1406,23 @@ mod tests {
 
     #[test]
     fn user_function_wins_against_beetle_within_budget_and_costs_exactly_one_more_than_inline() {
-        // Escaravelho: vida 90, orcamento 16, fraqueza ExigeGuarda
-        // (src/monsters/data.rs). O combo so ataca quando a postura
-        // permite; sem esse `if` o script nao vence (harness.md: "um
-        // script sem if nao vence"). A versao com func e a equivalente
-        // sem func tomam exatamente a mesma decisao e acertam o mesmo
-        // golpe efetivo — mas a versao com func gasta 1 ciclo mais
-        // (USER_CALL_COST) e por isso sobra 1 ciclo menos pro golpe
-        // bonus no fim do turno (vm.rs: `remaining` vira dano extra). O
-        // resultado final da vida do inimigo difere em exatamente 1 ponto
-        // de vida: a abstracao nunca e mais barata que o inline, nem por
-        // acidente via o golpe bonus.
+        // Escaravelho: vida 110, orcamento 17 (RFC-021 recalibrou os dois --
+        // ver comentario em data.rs::beetle), fraqueza ExigeGuarda. O combo
+        // so ataca quando a postura permite; sem esse `if` o script nao
+        // vence (harness.md: "um script sem if nao vence"). A versao com
+        // func e a equivalente sem func tomam exatamente a mesma decisao e
+        // acertam o mesmo golpe efetivo — mas a versao com func gasta 1
+        // ciclo mais (USER_CALL_COST) e por isso sobra 1 ciclo menos pro
+        // golpe bonus no fim do turno (vm.rs: `remaining` vira dano extra).
+        // O resultado final da vida do inimigo difere em exatamente 1
+        // ponto de vida: a abstracao nunca e mais barata que o inline, nem
+        // por acidente via o golpe bonus. (O orcamento calibrado em si nao
+        // muda o resultado desta comparacao -- so precisa caber as duas
+        // versoes sem truncar, o que qualquer orcamento >= 5 ja garante.)
         let with_func = "func combo():\n    if inimigo.postura == \"guarda\":\n        atacar(espada[\"ferro\"])\n    else:\n        esperar()\n\ncombo()\n";
         let without_func = "if inimigo.postura == \"guarda\":\n    atacar(espada[\"ferro\"])\nelse:\n    esperar()\n";
 
-        let budget = 16;
+        let budget = 17;
         let with = run(with_func, budget, Weakness::ExigeGuarda, Posture::Guarda);
         let without = run(without_func, budget, Weakness::ExigeGuarda, Posture::Guarda);
 
@@ -1574,7 +1692,7 @@ mod tests {
         match &r.events[0] {
             TurnEvent::Attacked { effective, damage, .. } => {
                 assert!(!*effective);
-                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 4);
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 8); // RFC-021: /4 -> /8
             }
             other => panic!("evento inesperado: {other:?}"),
         }
@@ -1598,8 +1716,8 @@ mod tests {
         // vida 150, orcamento 16.
         //
         // Ingenua: atacar() cabe 8x em 16 ciclos (8x2=16, sem sobra).
-        // depth==0 o turno inteiro -> cada golpe usa a reducao /4:
-        // 8 x (BASE_ATTACK_DAMAGE=12 / 4) = 8 x 3 = 24 dano/turno.
+        // depth==0 o turno inteiro -> cada golpe usa a reducao (RFC-021: /8):
+        // 8 x (BASE_ATTACK_DAMAGE=12 / 8) = 8 x 1 = 8 dano/turno.
         let naive_src = "atacar(espada.Bronze)\n".repeat(8);
         let budget = 16;
         let mut life = 150;
@@ -1660,7 +1778,7 @@ mod tests {
         match &sem_invocar.events[0] {
             TurnEvent::Attacked { effective, damage, .. } => {
                 assert!(!*effective);
-                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 4);
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 8); // RFC-021: /4 -> /8
             }
             other => panic!("evento inesperado: {other:?}"),
         }
@@ -1674,7 +1792,7 @@ mod tests {
         match uma_invocacao.events.iter().find(|e| matches!(e, TurnEvent::Attacked { .. })) {
             Some(TurnEvent::Attacked { effective, damage, .. }) => {
                 assert!(!*effective, "1 invocacao nao basta -- precisa das 2");
-                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 4);
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 8); // RFC-021: /4 -> /8
             }
             other => panic!("evento inesperado: {other:?}"),
         }
@@ -1690,8 +1808,8 @@ mod tests {
         // 150, orcamento 12.
         //
         // Ingenua: atacar() cabe 6x em 12 ciclos (6x2=12, sem sobra).
-        // invocations_this_turn == 0 o turno inteiro -> reducao /4:
-        // 6 x (BASE_ATTACK_DAMAGE=12 / 4) = 6 x 3 = 18 dano/turno.
+        // invocations_this_turn == 0 o turno inteiro -> reducao (RFC-021: /8):
+        // 6 x (BASE_ATTACK_DAMAGE=12 / 8) = 6 x 1 = 6 dano/turno.
         let naive_src = "atacar(espada.Bronze)\n".repeat(6);
         let budget = 12;
         let mut life = 150;
@@ -2198,7 +2316,7 @@ mod tests {
         match &r.events[0] {
             TurnEvent::Attacked { effective, damage, .. } => {
                 assert!(!*effective, "atacar() dentro de invocar sem func interno nao pode ser efetivo contra Apagado");
-                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 4);
+                assert_eq!(*damage, BASE_ATTACK_DAMAGE / 8); // RFC-021: /4 -> /8
             }
             other => panic!("evento inesperado: {other:?}"),
         }
@@ -2209,12 +2327,15 @@ mod tests {
         // Jogabilidade (criterio de aceite): as duas invocacoes do exemplo
         // da RFC, combinadas com um script principal razoavel, nao podem
         // estourar o orcamento principal de nenhum monstro do bestiario
-        // atual (menor orcamento: Zumbi, 8 ciclos - src/monsters/data.rs).
+        // atual. RFC-021 recalibrou o orcamento do Zumbi (8 -> 16, ver
+        // `data.rs::zombie` e a bateria de testes de ordenacao logo abaixo)
+        // para que `Weakness::Eficiencia` seja punivel de verdade -- o menor
+        // orcamento do bestiario passa a ser o do Aker, 10 ciclos.
         let src = "invocar esqueleto:\n    atacar(espada.Ferro)\ninvocar mago_morto:\n    atacar(magia.Fogo)\natacar(espada.Ferro)\n";
         let program = parse(src).unwrap();
         // custo no orcamento principal: 2*INVOKE_COST + 1 atacar() = 4 + 2 = 6
-        let r = run_turn(&program, &mut HashMap::new(), 8, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
-        assert!(!r.truncated, "script de referencia com duas invocacoes nao pode estourar nem o menor orcamento do bestiario (Zumbi, 8)");
+        let r = run_turn(&program, &mut HashMap::new(), 10, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
+        assert!(!r.truncated, "script de referencia com duas invocacoes nao pode estourar nem o menor orcamento do bestiario (Aker, 10)");
     }
 
     // --- RFC-015: selecionar() sobre a mochila ------------------------
@@ -2453,5 +2574,267 @@ mod tests {
             Some(TurnEvent::Attacked { damage, .. }) => assert_eq!(*damage, BASE_ATTACK_DAMAGE + 6),
             other => panic!("evento inesperado: {other:?}"),
         }
+    }
+
+    // --- RFC-018: validação ao vivo (parse + dry-run reais, substitui a
+    // heurística estimate_cost que só contava 1 por LINHA de texto) ------
+
+    #[test]
+    fn probe_turn_with_bag_reports_real_cycles_not_line_count_for_a_loop() {
+        // O bug original (RFC-018): a barra de ciclos contava 1 por LINHA,
+        // não por iteração. `for i in 0..5: esperar()` tem 2 linhas de
+        // texto, mas custa muito mais que 2 ciclos de verdade (5 checagens
+        // de laço + 5 execuções do corpo).
+        let src = "for i in 0..5:\n    esperar()\n";
+        let program = parse(src).unwrap();
+        let vars = HashMap::new();
+        let p =
+            probe_turn_with_bag(&program, &vars, 100, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), None, None, None).unwrap();
+        assert!(!p.truncated);
+        assert!(p.cycles_used > 2, "heuristica antiga contaria 2 (uma por linha); custo real de 5 iteracoes tem que ser bem maior");
+
+        // E bate exatamente com o que a passada real gastaria — a garantia
+        // central da RFC é que o número mostrado ao vivo é sempre o mesmo
+        // que aparece depois de EXECUTAR, nunca uma aproximação.
+        let real =
+            run_turn(&program, &mut HashMap::new(), 100, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 10, false).unwrap();
+        assert_eq!(p.cycles_used, real.cycles_used);
+    }
+
+    #[test]
+    fn probe_turn_with_bag_surfaces_the_real_validation_error_instead_of_masking_it() {
+        // Script sintaticamente válido (parseia) mas semanticamente
+        // inválido — variável não definida usada como argumento. A
+        // heurística antiga (estimate_cost, só contava linha) não detectava
+        // isso; a validação ao vivo tem que devolver o erro real, igual à
+        // passada de verdade devolveria.
+        let src = "atacar(naoexiste)\n";
+        let program = parse(src).unwrap();
+        let vars = HashMap::new();
+        let err =
+            probe_turn_with_bag(&program, &vars, 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), None, None, None).unwrap_err();
+        assert!(!err.message.is_empty());
+    }
+
+    #[test]
+    fn probe_turn_with_bag_over_budget_is_not_an_error_only_truncated_flag() {
+        // RFC-018 regra 4: estourar orçamento durante a validação ao vivo
+        // não é erro de sintaxe — só aparece na flag `truncated` (que a UI
+        // usa pra colorir a barra de ciclos), sem travar a edição.
+        let src = "while inimigo.vida > 0:\n    atacar(espada.Bronze)\n";
+        let program = parse(src).unwrap();
+        let vars = HashMap::new();
+        let p =
+            probe_turn_with_bag(&program, &vars, 6, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), None, None, None).unwrap();
+        assert!(p.truncated);
+        assert!(p.cycles_used <= 6);
+    }
+
+    #[test]
+    fn probe_turn_with_bag_never_mutates_the_caller_vars_across_many_calls() {
+        // RFC-018 regra 3 / risco "vazamento de player_vars real": mesmo
+        // rodando a validação dezenas de vezes seguidas (o que acontece a
+        // cada frame enquanto o jogador digita), o mapa do chamador não
+        // muda — `probe_turn_with_bag` só lê `&HashMap`, clona por dentro
+        // (mesma disciplina da RFC-010, regra 2).
+        let src = "x = 1\ny = x + 1\natacar(espada.Bronze)\n";
+        let program = parse(src).unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("preexistente".to_string(), Value::Num(7.0));
+        let snapshot = vars.clone();
+
+        for _ in 0..20 {
+            let _ =
+                probe_turn_with_bag(&program, &vars, 20, 100, 100, 100, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), None, None, None);
+        }
+
+        assert_eq!(vars, snapshot, "varias validacoes ao vivo sem EXECUTAR nao podem alterar o vars real do jogador");
+    }
+
+    // --- RFC-021: fraquezas mais punitivas — bateria de ordenação para os
+    // 3 monstros que nunca passaram por essa verificação (Múmia, Zumbi,
+    // Escaravelho), mesma disciplina que a RFC-011 estabeleceu para Aker e
+    // as RFC-012/017 já seguiam para Apagado/Chabti-Mor. ---
+
+    #[test]
+    fn mummy_naive_wrong_element_never_beats_correct_element_in_fewer_turns() {
+        // RFC-021 regra 2 / criterio de aceite: Múmia (data.rs::mummy) nunca
+        // tinha essa verificação. Vida 100, orçamento 20 (calibrados desde
+        // sempre, não mudam por esta RFC — só o divisor mudou).
+        //
+        // Ingênua: ataca com o elemento errado (água) repetidamente, 10x em
+        // 20 ciclos (10x2=20, sem sobra). Elemento nunca casa -> reducao
+        // (RFC-021: /8): 10 x (BASE_ATTACK_DAMAGE=12 / 8) = 10 x 1 = 10
+        // dano/turno.
+        let naive_src = "atacar(magia[\"agua\"])\n".repeat(10);
+        let budget = 20;
+        let mut life = 100;
+        let mut naive_turns = 0;
+        while life > 0 && naive_turns < 200 {
+            let program = parse(&naive_src).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 8, false).unwrap();
+            assert!(!r.truncated, "spam ingenuo (10x atacar = 20 ciclos) nao deveria estourar o orcamento de 20");
+            life = r.enemy_life;
+            naive_turns += 1;
+        }
+        assert_eq!(life, 0, "spam ingenuo precisa vencer eventualmente (senao o teste nao compara nada)");
+
+        // Correta: mesmo script, só o item muda (fogo em vez de água) --
+        // mesmo custo em ciclos, elemento sempre casa -> dano cheio:
+        // 10 x BASE_ATTACK_DAMAGE(12) = 120 dano/turno.
+        let correct_src = "atacar(magia[\"fogo\"])\n".repeat(10);
+        let mut life = 100;
+        let mut correct_turns = 0;
+        while life > 0 && correct_turns < 200 {
+            let program = parse(&correct_src).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 100, Posture::Guarda, Weakness::Elemento(Element::Fogo), 8, false).unwrap();
+            assert!(!r.truncated, "script com elemento certo nao pode estourar o orcamento calibrado de 20");
+            life = r.enemy_life;
+            correct_turns += 1;
+        }
+        assert_eq!(life, 0, "script com elemento certo precisa vencer a Mumia dentro do orcamento calibrado");
+
+        assert!(
+            correct_turns < naive_turns,
+            "a estrategia com elemento certo ({correct_turns} turnos) precisa vencer em menos turnos que o spam ingenuo ({naive_turns} turnos)"
+        );
+        assert!(
+            naive_turns >= correct_turns * 2,
+            "margem fraca: ingenua {naive_turns} turnos vs correta {correct_turns} turnos -- nao pode ser um empate raso"
+        );
+    }
+
+    #[test]
+    fn zombie_naive_waste_never_beats_efficient_script_in_fewer_turns() {
+        // RFC-021 regra 2 / criterio de aceite: Zumbi (data.rs::zombie)
+        // nunca tinha essa verificação -- e não podia: com
+        // `cycle_budget == max_ciclos` (8 == 8, valor pré-RFC-021), nenhum
+        // turno legal (que não estoure o próprio orçamento) conseguia
+        // jamais ultrapassar `max_ciclos`, então `Weakness::Eficiencia`
+        // nunca acertava a redução de verdade em jogo. Este teste é o que
+        // expôs isso -- por isso `cycle_budget` subiu para 16 (o dobro;
+        // `max_ciclos` continua 8, a condição da fraqueza não mudou, ver
+        // comentário em `data.rs::zombie`). Vida 80 (inalterada).
+        //
+        // Ingênua: um script perdulário -- 8x esperar() (puro enchimento,
+        // 8 ciclos) antes de atacar, representando um jogador que não pensa
+        // em eficiência (exatamente o que Zumbi pune). cycles_used chega a
+        // 8 só de enchimento; cada atacar() subsequente carrega +2 e já
+        // ultrapassa max_ciclos=8 ANTES do dano ser calculado (charge()
+        // roda antes de resolve_attack em eval_native_call) -> os 4 ataques
+        // que cabem nos 8 ciclos restantes (4x2=8, total 16=orçamento, sem
+        // sobra) saem todos reduzidos (RFC-021: /8):
+        // 4 x (BASE_ATTACK_DAMAGE=12 / 8) = 4 x 1 = 4 dano/turno.
+        let naive_src = "esperar()\n".repeat(8) + &"atacar(espada.Bronze)\n".repeat(4);
+        let budget = 16;
+        let mut life = 80;
+        let mut naive_turns = 0;
+        while life > 0 && naive_turns < 200 {
+            let program = parse(&naive_src).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 80, Posture::Guarda, Weakness::Eficiencia { max_ciclos: 8 }, 6, false).unwrap();
+            assert!(!r.truncated, "spam perdulario (8 esperar + 4 atacar = 16 ciclos) nao deveria estourar o orcamento de 16");
+            life = r.enemy_life;
+            naive_turns += 1;
+        }
+        assert_eq!(life, 0, "script perdulario precisa vencer eventualmente (senao o teste nao compara nada)");
+
+        // Correta: ataca direto, sem enchimento -- 4 atacar() (8 ciclos).
+        // cycles_used nunca passa de 8 (o proprio custo do ultimo ataque
+        // encosta exatamente no limite, "<=" inclui a borda) -> dano cheio
+        // em todos: 4 x BASE_ATTACK_DAMAGE(12) = 48, mais o bonus dos 8
+        // ciclos sobrando (16 orcamento - 8 usados) = 48 + 8 = 56 dano/turno.
+        let correct_src = "atacar(espada.Bronze)\n".repeat(4);
+        let mut life = 80;
+        let mut correct_turns = 0;
+        while life > 0 && correct_turns < 200 {
+            let program = parse(&correct_src).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 80, Posture::Guarda, Weakness::Eficiencia { max_ciclos: 8 }, 6, false).unwrap();
+            assert!(!r.truncated, "script eficiente (4x atacar = 8 ciclos) nao pode estourar o orcamento calibrado de 16");
+            life = r.enemy_life;
+            correct_turns += 1;
+        }
+        assert_eq!(life, 0, "script eficiente precisa vencer o Zumbi dentro do orcamento calibrado");
+
+        assert!(
+            correct_turns < naive_turns,
+            "a estrategia eficiente ({correct_turns} turnos) precisa vencer em menos turnos que o spam perdulario ({naive_turns} turnos)"
+        );
+        assert!(
+            naive_turns >= correct_turns * 2,
+            "margem fraca: perdularia {naive_turns} turnos vs eficiente {correct_turns} turnos -- nao pode ser um empate raso"
+        );
+    }
+
+    #[test]
+    fn beetle_naive_spam_never_beats_posture_branch_in_fewer_turns() {
+        // RFC-021 regra 2 / criterio de aceite: Escaravelho (data.rs::beetle)
+        // nunca tinha essa verificação. `ExigeGuarda` é a única fraqueza com
+        // condição *ambiente* (a postura alterna sozinha a cada turno,
+        // `Posture::toggled`) em vez de exigir uma ação do jogador -- um
+        // script cego (sem `if`) já acerta dano cheio em metade dos turnos
+        // (os de guarda), de graça. Isso bate um teto estrutural em quanto
+        // qualquer divisor consegue punir aqui (ver comentário em
+        // `resolve_attack_by_weakness` e em `data.rs::beetle`): com o
+        // `cycle_budget` par original (16), o único ciclo do `if` de
+        // bifurcação custava um ataque inteiro no turno de guarda (o de
+        // maior valor), tornando o spam cego competitivo ou até melhor --
+        // um antijogo real, achado por este teste. `cycle_budget` subiu
+        // para 17 (ímpar: a folga absorve o custo do `if` sem custar um
+        // ataque) e `max_life` para 110 (a vantagem real do script correto
+        // precisa de mais de 1 turno pra aparecer). Nenhuma mudança na
+        // condição da fraqueza em si.
+        //
+        // Ingênua: atacar() cabe 8x em 17 ciclos (8x2=16, sobra 1). Postura
+        // alterna a cada turno começando em guarda:
+        // guarda: 8 x BASE_ATTACK_DAMAGE(12) = 96, + bonus do 1 ciclo
+        //   sobrando = 97 dano.
+        // aberta: 8 x (BASE_ATTACK_DAMAGE=12 / 8 = 1) = 8, + bonus 1 = 9 dano.
+        let naive_src = "atacar(espada.Bronze)\n".repeat(8);
+        let budget = 17;
+        let mut life: i32 = 110;
+        let mut posture = Posture::Guarda;
+        let mut naive_turns = 0;
+        while life > 0 && naive_turns < 200 {
+            let program = parse(&naive_src).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 110, posture, Weakness::ExigeGuarda, 7, false).unwrap();
+            assert!(!r.truncated, "spam cego (8x atacar = 16 de 17 ciclos) nao deveria estourar o orcamento");
+            life = r.enemy_life;
+            posture = posture.toggled();
+            naive_turns += 1;
+        }
+        assert_eq!(life, 0, "spam cego precisa vencer eventualmente (senao o teste nao compara nada)");
+
+        // Correta: lê a postura -- ataca 8x só na guarda (if custa 1 ciclo
+        // + 8x2=16 = 17, exatamente o orçamento, mesmos 8 ataques da
+        // ingênua: a folga ímpar absorve o `if` sem custar um ataque); na
+        // aberta não ataca (sem `else`, o `if` custa só 1 ciclo) e banca os
+        // 16 ciclos restantes como golpe bônus, mais valioso por ciclo do
+        // que um ataque reduzido (1 dano / 2 ciclos):
+        // guarda: 8 x 12 = 96 dano (sem sobra, sem bonus).
+        // aberta: bonus de 17-1=16 dano.
+        let correct_src = "if inimigo.postura == \"guarda\":\n".to_string() + &"    atacar(espada.Bronze)\n".repeat(8);
+        let mut life: i32 = 110;
+        let mut posture = Posture::Guarda;
+        let mut correct_turns = 0;
+        while life > 0 && correct_turns < 200 {
+            let program = parse(&correct_src).unwrap();
+            let r = run_turn(&program, &mut HashMap::new(), budget, 100, 100, life, 110, posture, Weakness::ExigeGuarda, 7, false).unwrap();
+            assert!(!r.truncated, "script com if de postura nao pode estourar o orcamento calibrado de 17");
+            life = r.enemy_life;
+            posture = posture.toggled();
+            correct_turns += 1;
+        }
+        assert_eq!(life, 0, "script com if de postura precisa vencer o Escaravelho dentro do orcamento calibrado");
+
+        // RFC-021: a margem aqui é estruturalmente mais modesta que nas
+        // outras 5 fraquezas (todas action-gated: falham 100% das vezes
+        // sem a ação certa) -- ExigeGuarda já acerta cheio de graça na
+        // metade dos turnos. "menos turnos, com margem clara" continua
+        // valendo (33% menos turnos com os números calibrados acima), só
+        // não é o mesmo múltiplo de 2x das outras 5.
+        assert!(
+            correct_turns < naive_turns,
+            "a estrategia com if de postura ({correct_turns} turnos) precisa vencer em menos turnos que o spam cego ({naive_turns} turnos)"
+        );
     }
 }

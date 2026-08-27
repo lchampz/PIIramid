@@ -12,7 +12,6 @@ use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
 use crate::inventory::{SaveData, SavedScript};
 use crate::monsters::MonsterState;
-use crate::script::api;
 use crate::script::error::ScriptError;
 use crate::script::parser;
 use crate::script::value::{ItemKind, Value};
@@ -50,10 +49,199 @@ enum Phase {
     Error(ScriptError),
 }
 
+/// RFC-018: resultado da validação ao vivo (parse real + passada de
+/// validação real da VM) do texto atual do editor, recalculado a cada
+/// frame em `Phase::Writing`. Não é `Phase` de propósito — ao contrário de
+/// `Phase::Error`, isto nunca trava a edição nem substitui o resultado de
+/// um EXECUTAR de verdade; é só o que a barra de sintaxe/ciclos mostra
+/// *antes* do jogador apertar EXECUTAR. Cacheado em `DuelScene` porque
+/// `draw()` não tem acesso a `SaveData`/`MonsterState` mutável o bastante
+/// pra recalcular na hora de desenhar (ver `update()`).
+enum LiveCheck {
+    /// `parser::parse` ou a passada de validação da VM rejeitaram o texto
+    /// atual — o erro é real, mesmo formato que `Phase::Error` já usa.
+    Invalid(ScriptError),
+    /// Parseou e validou. `truncated` reflete só se o orçamento estourou
+    /// na validação — isso não é erro de sintaxe (regra 4 da RFC-018),
+    /// só faz a barra de ciclos ficar no alerta que `over` já define.
+    Valid { cycles_used: u32, truncated: bool },
+}
+
 struct HitPopup {
     value: i32,
     special: bool,
     timer: f32,
+}
+
+// RFC-020: reação visual de dano nos retratos — mesma técnica do idle bob
+// (`hero_bob`/`foe_bob` em `draw_arena`), sem sprite-sheet novo. Dois tipos
+// de reação, independentes, porque cada um nasce de um evento diferente:
+// `HitReaction` ("eu tomei o golpe": recuo em shake + tingimento de sangue)
+// e `LungeReaction` ("eu desferi o golpe": avanço em direção ao alvo).
+//
+// Números abaixo são chute informado do gamedev, não do designer (não há
+// designer disponível agora — RFC-020 pede pra documentar a justificativa
+// e marcar como ajustável). // TODO(designer): revisar todos os números
+// desta seção.
+
+/// 3 meios-ciclos de seno = vai-volta-vai — lê como "impacto" em vez de um
+/// deslize único pro lado, dentro da janela de 150-250ms que a RFC pede.
+const HIT_SHAKE_OSCILLATIONS: f32 = 3.0;
+
+/// Golpe efetivo (`effective: true`) ou contra-ataque não-bloqueado —
+/// reação "forte" (regras 2 e 3 da RFC).
+const HIT_STRONG_DURATION_S: f32 = 0.22;
+/// Bem acima do idle bob (4-5px, ver `hero_bob`/`foe_bob`) pra ser
+/// distinguível dele, mas pequeno frente aos ~120-170px do retrato — não
+/// pode competir com a leitura do editor (regra 6, inviolável desde a
+/// RFC-001).
+const HIT_STRONG_AMPLITUDE_PX: f32 = 10.0;
+/// Visível mas o retrato continua legível — mitigação do risco "tingimento
+/// deixa o retrato ilegível" que a própria RFC-020 lista.
+const HIT_STRONG_TINT_ALPHA: f32 = 0.35;
+
+/// Golpe de raspão (`effective: false`) ou contra-ataque bloqueado —
+/// reação "fraca": no piso de duração da RFC e com amplitude na mesma
+/// faixa do idle bob. "Quase não reagiu" É o feedback pretendido (regra 2:
+/// um golpe de raspão com reação forte mentiria sobre o que aconteceu).
+const HIT_WEAK_DURATION_S: f32 = 0.15;
+const HIT_WEAK_AMPLITUDE_PX: f32 = 4.0;
+const HIT_WEAK_TINT_ALPHA: f32 = 0.12;
+
+/// Mais curto que a reação de dano — o lunge é só "o peso do golpe", não
+/// deve prolongar-se e brigar visualmente com a reação de quem recebe.
+const LUNGE_DURATION_S: f32 = 0.18;
+/// Maior que o deslocamento de dano forte (10px) de propósito: avançar é
+/// um movimento de corpo inteiro, o recuo é só o abalo do impacto.
+const LUNGE_AMPLITUDE_PX: f32 = 14.0;
+
+/// Recuo rápido + tingimento `SANGUE` decaindo a zero. Nasce em
+/// `Phase::Executing` quando `Attacked`/`BonusStrike`/`CounterAttack` é
+/// revelado (mesmo ponto onde `HitPopup` já nasce hoje) e expira sozinho.
+#[derive(Clone, Copy)]
+struct HitReaction {
+    timer: f32,
+    duration: f32,
+    amplitude_px: f32,
+    tint_alpha: f32,
+}
+
+impl HitReaction {
+    /// `strong` decide o par de tabelas (forte = golpe efetivo/contra-ataque
+    /// não bloqueado; fraco = raspão/bloqueado) — regras 2 e 3 da RFC-020.
+    fn new(strong: bool) -> Self {
+        if strong {
+            HitReaction { timer: 0.0, duration: HIT_STRONG_DURATION_S, amplitude_px: HIT_STRONG_AMPLITUDE_PX, tint_alpha: HIT_STRONG_TINT_ALPHA }
+        } else {
+            HitReaction { timer: 0.0, duration: HIT_WEAK_DURATION_S, amplitude_px: HIT_WEAK_AMPLITUDE_PX, tint_alpha: HIT_WEAK_TINT_ALPHA }
+        }
+    }
+
+    /// Deslocamento horizontal do instante atual: amplitude * envelope de
+    /// decaimento linear * seno (o "shake" vai-volta-vai). Curva linear no
+    /// decaimento é aceitável pra uma primeira versão (a própria RFC
+    /// permite).
+    fn shake_px(&self) -> f32 {
+        let progress = (self.timer / self.duration).clamp(0.0, 1.0);
+        let decay = 1.0 - progress;
+        self.amplitude_px * decay * (progress * std::f32::consts::PI * HIT_SHAKE_OSCILLATIONS).sin()
+    }
+
+    /// Opacidade do tingimento no instante atual — decaimento linear a
+    /// zero, mesmo espírito do `HitPopup` acima.
+    fn tint_alpha_now(&self) -> f32 {
+        let progress = (self.timer / self.duration).clamp(0.0, 1.0);
+        self.tint_alpha * (1.0 - progress)
+    }
+}
+
+/// Avanço/lunge de quem desfere o golpe, na direção do alvo. Nasce junto
+/// com o `HitReaction` do lado oposto (mesmo evento, mesmo tick de
+/// `Phase::Executing`), regra 4 da RFC-020.
+#[derive(Clone, Copy)]
+struct LungeReaction {
+    timer: f32,
+    duration: f32,
+}
+
+impl LungeReaction {
+    fn new() -> Self {
+        LungeReaction { timer: 0.0, duration: LUNGE_DURATION_S }
+    }
+
+    /// `direction`: +1.0 avança pra direita (jogador, que ataca o monstro à
+    /// direita), -1.0 avança pra esquerda (monstro, que ataca o jogador à
+    /// esquerda). Único hump de seno (0 -> pico -> 0): avança e volta, sem
+    /// oscilar feito o shake do `HitReaction` — é um movimento, não um
+    /// tremor.
+    fn offset_px(&self, direction: f32) -> f32 {
+        let progress = (self.timer / self.duration).clamp(0.0, 1.0);
+        direction * LUNGE_AMPLITUDE_PX * (progress * std::f32::consts::PI).sin()
+    }
+}
+
+/// Estado de animação reativa de um retrato inteiro (regra 5 da RFC-020) —
+/// um valor destes por jogador, outro por monstro. `hit` e `lunge` são
+/// independentes porque nascem de papéis diferentes no mesmo evento (quem
+/// bateu vs. quem apanhou), e um retrato pode acumular os dois no mesmo
+/// turno (ex.: o monstro ataca de volta: o jogador toma `hit`, o monstro
+/// tem `lunge` — nunca os dois ao mesmo tempo no mesmo retrato, mas o tipo
+/// não precisa saber disso pra funcionar).
+#[derive(Clone, Copy, Default)]
+struct PortraitAnim {
+    hit: Option<HitReaction>,
+    lunge: Option<LungeReaction>,
+}
+
+impl PortraitAnim {
+    /// Chamado todo frame, independente da fase — mesmo padrão do timer de
+    /// `HitPopup` em `update()`: a animação decai até o fim mesmo que a
+    /// cena já tenha voltado pra `Phase::Writing` no meio do caminho.
+    fn advance(&mut self, dt: f32) {
+        if let Some(h) = &mut self.hit {
+            h.timer += dt;
+            if h.timer >= h.duration {
+                self.hit = None;
+            }
+        }
+        if let Some(l) = &mut self.lunge {
+            l.timer += dt;
+            if l.timer >= l.duration {
+                self.lunge = None;
+            }
+        }
+    }
+}
+
+/// Aplica a reação correspondente aos retratos quando um `TurnEvent` de
+/// combate é revelado em `Phase::Executing` — mesmo ponto onde
+/// `popup_for_event` já dispara o `HitPopup` hoje (regra 5 da RFC-020).
+/// Eventos sem golpe (`Defended`, `Inspected`, `Healed`, `Waited`,
+/// `Truncated`, `Selected`) não tocam nenhum dos dois retratos.
+fn trigger_portrait_reactions(hero: &mut PortraitAnim, foe: &mut PortraitAnim, ev: &TurnEvent) {
+    match ev {
+        // regra 1 + 2: quem apanha é o monstro; a intensidade reflete
+        // `effective`. Regra 4: o jogador (quem golpeou) avança.
+        TurnEvent::Attacked { effective, .. } => {
+            foe.hit = Some(HitReaction::new(*effective));
+            hero.lunge = Some(LungeReaction::new());
+        }
+        // Golpe bônus (script eficiente) é sempre um acerto limpo — sem
+        // campo `effective` porque a VM só o emite quando sobrou ciclo, ou
+        // seja, nunca é "de raspão" (ver `script/vm.rs`); trata como forte.
+        TurnEvent::BonusStrike { .. } => {
+            foe.hit = Some(HitReaction::new(true));
+            hero.lunge = Some(LungeReaction::new());
+        }
+        // regra 1 + 3: quem apanha é o jogador; a intensidade reflete o
+        // inverso de `blocked` (bloqueado = reação mais suave). Regra 4: o
+        // monstro (quem golpeou) avança.
+        TurnEvent::CounterAttack { blocked, .. } => {
+            hero.hit = Some(HitReaction::new(!*blocked));
+            foe.lunge = Some(LungeReaction::new());
+        }
+        _ => {}
+    }
 }
 
 /// RFC-009 regra 3: estado por cartão de comando — hover atualizado todo
@@ -93,6 +281,10 @@ pub struct DuelScene {
     log: Vec<(String, Color)>,
     turn: u32,
     hit: Option<HitPopup>,
+    /// RFC-020, regra 5: estado de animação reativa por retrato — um para
+    /// o jogador, outro para o monstro.
+    hero_anim: PortraitAnim,
+    foe_anim: PortraitAnim,
     btn_execute: Button,
     btn_leave: Button,
     btn_clear: Button,
@@ -106,6 +298,8 @@ pub struct DuelScene {
     /// ao sair dele — é assim que "nunca entre duelos diferentes"
     /// (não-objetivo 1 da RFC) é cumprido sem lógica de limpeza explícita.
     player_vars: HashMap<String, Value>,
+    /// RFC-018: última validação ao vivo do texto do editor. Ver `LiveCheck`.
+    live_check: LiveCheck,
 }
 
 impl DuelScene {
@@ -116,12 +310,18 @@ impl DuelScene {
             log: vec![("Escreva um script e aperte EXECUTAR (ou F5).".to_string(), theme::POEIRA)],
             turn: 1,
             hit: None,
+            hero_anim: PortraitAnim::default(),
+            foe_anim: PortraitAnim::default(),
             btn_execute: Button::new("EXECUTAR", vec2(10.0, BUTTONS_Y), vec2(EDITOR_W - 20.0 - 110.0, 56.0), ButtonStyle::Primary, theme::TITLE_SM),
             btn_leave: Button::new("FUGIR", vec2(10.0 + EDITOR_W - 20.0 - 100.0, BUTTONS_Y), vec2(100.0, 56.0), ButtonStyle::Secondary, theme::TITLE_SM),
             btn_clear: Button::new("LIMPAR", vec2(EDITOR_W - 90.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
             btn_save_script: Button::new("SALVAR", vec2(EDITOR_W - 90.0 - 86.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
             command_cards: vec![CommandCardState::default(); COMMANDS.len()],
             player_vars: HashMap::new(),
+            // editor começa vazio; `Valid { cycles_used: 0, .. }` é o
+            // resultado real de validar um script vazio (nenhuma chamada,
+            // nenhum ciclo) — não é um placeholder otimista.
+            live_check: LiveCheck::Valid { cycles_used: 0, truncated: false },
         }
     }
 
@@ -152,6 +352,13 @@ impl DuelScene {
                 self.hit = None;
             }
         }
+
+        // RFC-020: decai independente da fase, mesmo padrão do timer de
+        // `hit` acima — a reação termina sozinha mesmo se o turno já
+        // acabou (Phase::Executing -> Phase::Writing) no meio do caminho.
+        let dt = get_frame_time();
+        self.hero_anim.advance(dt);
+        self.foe_anim.advance(dt);
 
         // regra 3: o flash de clique decai independente da fase corrente,
         // mesmo padrão do timer de `hit` acima.
@@ -194,6 +401,10 @@ impl DuelScene {
         match &mut self.phase {
             Phase::Writing => {
                 self.editor.update();
+                // RFC-018 regra 1: recalculado a cada frame a partir do
+                // texto atual — nunca uma heurística, nunca um valor
+                // desatualizado da última edição.
+                self.live_check = Self::compute_live_check(&self.editor.text(), player, monster, save, &self.player_vars);
                 let want_run = self.btn_execute.clicked(mouse) || is_key_pressed(KeyCode::F5);
                 if want_run {
                     self.run_script(player, monster, save);
@@ -210,6 +421,9 @@ impl DuelScene {
                         if let Some(popup) = popup_for_event(ev) {
                             self.hit = Some(popup);
                         }
+                        // RFC-020, regra 5: mesmo ponto onde o HitPopup
+                        // nasce — a reação de retrato usa o mesmo gatilho.
+                        trigger_portrait_reactions(&mut self.hero_anim, &mut self.foe_anim, ev);
                         *index += 1;
                     } else {
                         self.editor.clear();
@@ -305,6 +519,39 @@ impl DuelScene {
         }
     }
 
+    /// RFC-018: validação ao vivo do texto atual do editor — parser real
+    /// mais uma passada de validação real da VM (`vm::probe_turn_with_bag`,
+    /// só a metade "dry-run" de `run_turn_with_bag`, sem a passada real que
+    /// aplicaria efeito). Não mexe em `monster` (nada de `begin_turn`/carga
+    /// — isso só acontece no turno de verdade, em `run_script`) e nunca
+    /// passa o `player_vars` original para a VM: `probe_turn_with_bag` só
+    /// lê `&self.player_vars` e clona internamente antes de rodar, então o
+    /// estado real do jogador não pode vazar aqui não importa quantas vezes
+    /// isto rode por segundo sem o jogador apertar EXECUTAR.
+    fn compute_live_check(src: &str, player: &Entity, monster: &MonsterState, save: &SaveData, player_vars: &HashMap<String, Value>) -> LiveCheck {
+        let program = match parser::parse(src) {
+            Ok(p) => p,
+            Err(e) => return LiveCheck::Invalid(e),
+        };
+        match vm::probe_turn_with_bag(
+            &program,
+            player_vars,
+            monster.spec.cycle_budget,
+            player.life_points,
+            player.max_life,
+            monster.life,
+            monster.spec.max_life,
+            monster.posture,
+            monster.spec.weakness,
+            Some(&save.loadout),
+            save.player_class,
+            Some(&save.bag),
+        ) {
+            Ok(p) => LiveCheck::Valid { cycles_used: p.cycles_used, truncated: p.truncated },
+            Err(e) => LiveCheck::Invalid(e),
+        }
+    }
+
     pub fn draw(&self, assets: &Assets, player: &Entity, monster: &MonsterState, foe_kind: Kind) {
         clear_background(theme::TUMBA);
         self.draw_top_bar(assets, monster);
@@ -325,12 +572,31 @@ impl DuelScene {
             TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::POEIRA, ..Default::default() },
         );
 
-        let cost = match &self.phase {
-            Phase::Writing | Phase::Error(_) => estimate_cost(&self.editor.lines),
-            Phase::Executing { result, .. } => result.cycles_used,
+        // RFC-018: fora de Phase::Executing (onde o resultado real de
+        // EXECUTAR já existe), o número mostrado é sempre o da última
+        // validação ao vivo (`self.live_check`, recalculada a cada frame em
+        // `update()`) — nunca mais uma heurística de contagem de linha.
+        // Erro de parse/validação não tem "ciclos" reais pra mostrar; 0 é
+        // honesto (o script não roda) e a barra de erro abaixo já comunica
+        // o motivo.
+        //
+        // `over` não é só `cost > budget`: a VM nunca deixa `cycles_used`
+        // passar do orçamento (`Vm::charge` recusa a última carga em vez de
+        // estourar o contador — ver `script/vm.rs`), então um script
+        // truncado quase sempre mostra `cycles_used <= budget` mesmo tendo
+        // estourado. RFC-018 regra 4 exige o alerta mesmo assim para a
+        // validação ao vivo, então `truncated` entra direto na condição em
+        // vez de depender só da comparação aritmética. (`Phase::Executing`
+        // mantém a comparação pré-existente — não é o que esta RFC pediu
+        // pra mudar; ver nota de dívida na entrega.)
+        let (cost, over) = match &self.phase {
+            Phase::Writing | Phase::Error(_) => match &self.live_check {
+                LiveCheck::Valid { cycles_used, truncated } => (*cycles_used, *truncated),
+                LiveCheck::Invalid(_) => (0, false),
+            },
+            Phase::Executing { result, .. } => (result.cycles_used, result.cycles_used > monster.spec.cycle_budget),
         };
         let budget = monster.spec.cycle_budget;
-        let over = cost > budget;
         let cyc_x = WIDTH - 280.0;
         draw_text_ex(
             "CICLOS",
@@ -388,10 +654,25 @@ impl DuelScene {
     }
 
     fn error_bar_style(&self) -> (Color, Color, Color, String) {
-        match &self.phase {
+        // RFC-018: erro real, seja o de uma execução passada
+        // (`Phase::Error`, inalterado) ou o da validação ao vivo do texto
+        // atual (`self.live_check` em `Phase::Writing`) — nunca mais
+        // "SINTAXE OK" fixo enquanto o jogador digita algo inválido.
+        // Estourar orçamento na validação (regra 4) NÃO é erro de
+        // sintaxe: continua caindo no braço "ok" abaixo, já que a barra de
+        // ciclos (`over`) é quem sinaliza isso.
+        let live_error = match &self.phase {
+            Phase::Writing => match &self.live_check {
+                LiveCheck::Invalid(e) => Some(e),
+                LiveCheck::Valid { .. } => None,
+            },
+            _ => None,
+        };
+        match (&self.phase, live_error) {
             // regra 6: SANGUE e exclusiva de dano/erro; o texto de erro
             // agora usa a cor do contrato em vez de um tom pastel a parte.
-            Phase::Error(e) => (theme::DANGER_BG, theme::SANGUE, theme::SANGUE, format!("{e}")),
+            (Phase::Error(e), _) => (theme::DANGER_BG, theme::SANGUE, theme::SANGUE, format!("{e}")),
+            (_, Some(e)) => (theme::DANGER_BG, theme::SANGUE, theme::SANGUE, format!("{e}")),
             // regra 7: MUSGO fica exclusiva do token de valor no editor —
             // "sintaxe ok" e um estado de sucesso, isso e VIDA.
             _ => (theme::OK_BG, theme::TIJOLO, theme::VIDA, "SINTAXE OK - PRONTO PARA EXECUTAR".to_string()),
@@ -486,7 +767,14 @@ impl DuelScene {
         let t = get_time() as f32;
         let hero_bob = (t * 1.8).sin() * 4.0;
         let hero_size = 120.0;
-        let hero_x = ARENA_X + 60.0;
+        // RFC-020: recuo (shake) + lunge somados ao x parado — somar em vez
+        // de substituir é a mitigação de risco que a própria RFC lista
+        // ("brigar visualmente com o idle bob"): o bob vertical continua
+        // intocado, só o eixo horizontal ganha o movimento reativo, então
+        // não competem pelo mesmo eixo.
+        let hero_hit_shake = self.hero_anim.hit.as_ref().map_or(0.0, HitReaction::shake_px);
+        let hero_lunge_x = self.hero_anim.lunge.as_ref().map_or(0.0, |l| l.offset_px(1.0));
+        let hero_x = ARENA_X + 60.0 + hero_hit_shake + hero_lunge_x;
         let hero_y = HEIGHT - 170.0 + hero_bob;
         draw_rectangle(hero_x, hero_y, hero_size, hero_size, theme::PEDRA);
         draw_rectangle_lines(hero_x, hero_y, hero_size, hero_size, 3.0, theme::OURO);
@@ -497,10 +785,18 @@ impl DuelScene {
             WHITE,
             DrawTextureParams { dest_size: Some(vec2(hero_size, hero_size)), ..Default::default() },
         );
+        if let Some(hit) = &self.hero_anim.hit {
+            let alpha = hit.tint_alpha_now();
+            if alpha > 0.0 {
+                draw_rectangle(hero_x, hero_y, hero_size, hero_size, Color::new(theme::SANGUE.r, theme::SANGUE.g, theme::SANGUE.b, alpha));
+            }
+        }
 
         let foe_bob = (t * 1.3 + 1.0).sin() * 5.0;
         let foe_size = 170.0;
-        let foe_x = ARENA_X + ARENA_W - foe_size - 60.0;
+        let foe_hit_shake = self.foe_anim.hit.as_ref().map_or(0.0, HitReaction::shake_px);
+        let foe_lunge_x = self.foe_anim.lunge.as_ref().map_or(0.0, |l| l.offset_px(-1.0));
+        let foe_x = ARENA_X + ARENA_W - foe_size - 60.0 + foe_hit_shake + foe_lunge_x;
         let foe_y = HEIGHT - 260.0 + foe_bob;
         draw_rectangle(foe_x, foe_y, foe_size, foe_size, theme::PEDRA);
         // regra 6: identidade do inimigo (moldura do retrato) e neutra —
@@ -513,6 +809,12 @@ impl DuelScene {
             WHITE,
             DrawTextureParams { dest_size: Some(vec2(foe_size, foe_size)), ..Default::default() },
         );
+        if let Some(hit) = &self.foe_anim.hit {
+            let alpha = hit.tint_alpha_now();
+            if alpha > 0.0 {
+                draw_rectangle(foe_x, foe_y, foe_size, foe_size, Color::new(theme::SANGUE.r, theme::SANGUE.g, theme::SANGUE.b, alpha));
+            }
+        }
         let tag = monster.spec.weakness.label();
         let weakness_icon = assets.icon_for_weakness(monster.spec.weakness);
         // RFC-013: selo ao lado da tag para as 4 fraquezas com ícone
@@ -704,30 +1006,6 @@ fn draw_hp_row(assets: &Assets, x: f32, y: f32, label: &str, life: i32, max_life
         y + 35.0,
         TextParams { font: Some(&assets.font_body_bold), font_size: 13, color: theme::PAPIRO, ..Default::default() },
     );
-}
-
-/// custo estimado do script atual, contando só as chamadas de função
-/// nativa reconhecidas linha a linha — usado pra colorir a barra de
-/// ciclos ENQUANTO o jogador ainda está digitando (antes de rodar de
-/// verdade), sem exigir que o texto já seja sintaticamente válido.
-fn estimate_cost(lines: &[String]) -> u32 {
-    lines
-        .iter()
-        .map(|line| {
-            for name in ["atacar", "defender", "inspecionar", "curar", "esperar"] {
-                if line.contains(name) {
-                    return api::call_cost(name).unwrap_or(0);
-                }
-            }
-            if line.trim_start().starts_with("if ") || line.trim_start().starts_with("while ") || line.trim_start().starts_with("for ") {
-                return 1;
-            }
-            if line.trim_start().starts_with("invocar ") {
-                return api::INVOKE_COST;
-            }
-            0
-        })
-        .sum()
 }
 
 const KEYWORDS: &[&str] =

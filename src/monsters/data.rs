@@ -21,6 +21,16 @@ pub fn mummy() -> MonsterSpec {
     }
 }
 
+/// RFC-021, achado adicional: com `cycle_budget == max_ciclos` (8 == 8, como
+/// era antes desta RFC) e estruturalmente impossivel um turno legal (que nao
+/// estoure o proprio orcamento) jamais ultrapassar `max_ciclos` -- a
+/// fraqueza nunca acertava a reducao de verdade em jogo, so no papel. O
+/// teste de ordenacao `zombie_naive_waste_never_beats_efficient_script`
+/// (`src/script/vm.rs`) exigiu abrir essa folga: `cycle_budget` sobe pra 16
+/// (o dobro), mas `max_ciclos` continua 8 -- a *condicao* da fraqueza nao
+/// muda (RFC-021 nao-objetivo 3), so o orcamento do monstro, que agora
+/// sobra espaco pra um script perdulario (ex.: `esperar()` de enchimento)
+/// realmente furar o limite de eficiencia e pagar o preco.
 pub fn zombie() -> MonsterSpec {
     MonsterSpec {
         title: "Zumbi",
@@ -30,7 +40,7 @@ pub fn zombie() -> MonsterSpec {
             "Um defunto sedento por cerebros, lento e burro: so aguenta scripts curtos.",
         ],
         max_life: 80,
-        cycle_budget: 8,
+        cycle_budget: 16,
         weakness: Weakness::Eficiencia { max_ciclos: 8 },
         base_damage: 6,
         attack_name: "Mordida Podre",
@@ -38,6 +48,19 @@ pub fn zombie() -> MonsterSpec {
     }
 }
 
+/// RFC-021: `ExigeGuarda` e a unica fraqueza cuja condicao e *ambiente*
+/// (postura alterna sozinha, `Posture::toggled`) em vez de exigir uma acao
+/// do jogador -- um script cego (sem `if`) ja acerta dano cheio em ~metade
+/// dos turnos, de graca. Isso limita o quanto qualquer divisor pune: com o
+/// `cycle_budget` par original (16), o unico ciclo do `if` de bifurcacao
+/// custava um ataque inteiro no turno de guarda, tornando o spam cego
+/// competitivo ou ate melhor que o script correto (antijogo). O teste de
+/// ordenacao `beetle_naive_spam_never_beats_posture_branch`
+/// (`src/script/vm.rs`) exigiu dois ajustes: `cycle_budget` impar (17, era
+/// 16) pra o `if` caber sem custar um ataque, e `max_life` um pouco maior
+/// (110, era 90) pra a vantagem real do script correto (menos turnos)
+/// aparecer antes do combate acabar num unico turno de sorte. Nenhuma
+/// mudanca na condicao da fraqueza em si.
 pub fn beetle() -> MonsterSpec {
     MonsterSpec {
         title: "Escaravelho",
@@ -46,8 +69,8 @@ pub fn beetle() -> MonsterSpec {
             "Uma carapaca dura que alterna entre postura de guarda e aberta.",
             "So toma dano de verdade se voce ler a postura e reagir a ela.",
         ],
-        max_life: 90,
-        cycle_budget: 16,
+        max_life: 110,
+        cycle_budget: 17,
         weakness: Weakness::ExigeGuarda,
         base_damage: 7,
         attack_name: "Investida da Carapaca",

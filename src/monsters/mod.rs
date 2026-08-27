@@ -124,7 +124,7 @@ impl Weakness {
 pub const CHARGE_PER_TURN: u32 = 7;
 pub const CHARGE_THRESHOLD: u32 = 20;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MonsterSpec {
     pub title: &'static str,
     /// nome da câmara onde esse monstro é encontrado, para o cabeçalho do duelo
@@ -139,6 +139,11 @@ pub struct MonsterSpec {
     pub special_attack_name: &'static str,
 }
 
+/// RFC-027: `Clone`/`PartialEq` existem só para o Ensaio Geral — clonar um
+/// `MonsterState` inteiro (spec + vida + postura + carga) é o que permite
+/// simular turnos futuros sobre uma cópia sem tocar o original, e comparar
+/// bit-a-bit antes/depois de ensaiar é o teste que prova que nada vazou.
+#[derive(Debug, Clone, PartialEq)]
 pub struct MonsterState {
     pub spec: MonsterSpec,
     pub life: i32,

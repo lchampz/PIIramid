@@ -457,6 +457,52 @@ pub fn run_turn_with_bag(
     })
 }
 
+/// Roda um turno inteiro contra um `MonsterState` de verdade: aplica a
+/// progressão real de turno (`begin_turn` — postura alterna, carga soma
+/// `CHARGE_PER_TURN`) **antes** de chamar `run_turn_with_bag`, e escreve o
+/// resultado de volta no próprio `MonsterState` (`life`, `consume_charge`
+/// se o golpe revelado foi o especial) **depois**. É a mesma sequência que
+/// `scenes/duel.rs::run_script` fazia inline para o turno real; extraída
+/// aqui (RFC-027) para ser a ÚNICA rotina de avanço de turno, chamada tanto
+/// pelo turno real (`monster: &mut MonsterState` emprestado da cena) quanto
+/// pelo Ensaio (`script::rehearsal::rehearse`, sobre um clone local) — nunca
+/// duas cópias da lógica de "o que acontece entre dois turnos".
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_turn(
+    program: &[Stmt],
+    vars: &mut HashMap<String, Value>,
+    monster: &mut crate::monsters::MonsterState,
+    player_life: i32,
+    player_max_life: i32,
+    loadout: Option<&Loadout>,
+    player_class: Option<PlayerClass>,
+    bag: Option<&Bag>,
+) -> Result<TurnResult, ScriptError> {
+    monster.begin_turn();
+    let special_ready = monster.special_ready();
+    let result = run_turn_with_bag(
+        program,
+        vars,
+        monster.spec.cycle_budget,
+        player_life,
+        player_max_life,
+        monster.life,
+        monster.spec.max_life,
+        monster.posture,
+        monster.spec.weakness,
+        monster.spec.base_damage,
+        special_ready,
+        loadout,
+        player_class,
+        bag,
+    )?;
+    monster.life = result.enemy_life;
+    if result.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { special: true, .. })) {
+        monster.consume_charge();
+    }
+    Ok(result)
+}
+
 /// Resultado de uma passada de **validação apenas** (RFC-018): nenhum
 /// efeito colateral real (vida, contra-ataque, golpe bônus, `vars` do
 /// chamador) — só o que a barra de ciclos da tela de duelo precisa pra

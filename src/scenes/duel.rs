@@ -14,6 +14,7 @@ use crate::inventory::{SaveData, SavedScript};
 use crate::monsters::{MonsterState, Weakness};
 use crate::script::error::ScriptError;
 use crate::script::parser;
+use crate::script::rehearsal::{self, RehearsalEnd};
 use crate::script::value::{ItemKind, Value};
 use crate::script::vm::{self, TurnEvent, TurnResult};
 use crate::ui::button::{Button, ButtonStyle};
@@ -286,6 +287,9 @@ pub struct DuelScene {
     hero_anim: PortraitAnim,
     foe_anim: PortraitAnim,
     btn_execute: Button,
+    /// RFC-027: ao lado de EXECUTAR — simula o duelo inteiro sobre um
+    /// clone, sem gastar turno real. Ver `run_rehearsal`.
+    btn_rehearse: Button,
     btn_leave: Button,
     btn_clear: Button,
     /// RFC-002, regra 10: grava o texto atual do editor em
@@ -309,6 +313,15 @@ pub struct DuelScene {
     player_vars: HashMap<String, Value>,
     /// RFC-018: última validação ao vivo do texto do editor. Ver `LiveCheck`.
     live_check: LiveCheck,
+    /// RFC-027: último resultado do Ensaio Geral, mostrado em
+    /// `draw_rehearsal_overlay` enquanto `show_rehearsal` é `true`. `None`
+    /// antes do primeiro ENSAIAR da cena — nunca inicializado com um
+    /// resultado inventado.
+    rehearsal: Option<rehearsal::RehearsalReport>,
+    /// `true` enquanto o painel do Ensaio está sobreposto à tela — mesmo
+    /// padrão modal de `show_load_menu` (bloqueia o resto de `update()`
+    /// naquele frame).
+    show_rehearsal: bool,
 }
 
 impl DuelScene {
@@ -321,8 +334,14 @@ impl DuelScene {
             hit: None,
             hero_anim: PortraitAnim::default(),
             foe_anim: PortraitAnim::default(),
-            btn_execute: Button::new("EXECUTAR", vec2(10.0, BUTTONS_Y), vec2(EDITOR_W - 20.0 - 110.0, 56.0), ButtonStyle::Primary, theme::TITLE_SM),
-            btn_leave: Button::new("FUGIR", vec2(10.0 + EDITOR_W - 20.0 - 100.0, BUTTONS_Y), vec2(100.0, 56.0), ButtonStyle::Secondary, theme::TITLE_SM),
+            // RFC-027 regra 1: EXECUTAR/ENSAIAR/FUGIR dividem a mesma linha
+            // (440px uteis = EDITOR_W - 20). FUGIR e ENSAIAR ficam com
+            // largura fixa (90/96), EXECUTAR (ação principal) fica com o
+            // resto — mesmo raciocínio de largura fixa que já existia entre
+            // EXECUTAR e FUGIR antes desta RFC.
+            btn_execute: Button::new("EXECUTAR", vec2(10.0, BUTTONS_Y), vec2(EDITOR_W - 20.0 - 90.0 - 96.0 - 16.0, 56.0), ButtonStyle::Primary, theme::TITLE_SM),
+            btn_rehearse: Button::new("ENSAIAR", vec2(10.0 + (EDITOR_W - 20.0 - 90.0 - 96.0 - 16.0) + 8.0, BUTTONS_Y), vec2(96.0, 56.0), ButtonStyle::Secondary, theme::TITLE_SM),
+            btn_leave: Button::new("FUGIR", vec2(10.0 + EDITOR_W - 20.0 - 90.0, BUTTONS_Y), vec2(90.0, 56.0), ButtonStyle::Secondary, theme::TITLE_SM),
             btn_clear: Button::new("LIMPAR", vec2(EDITOR_W - 90.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
             btn_save_script: Button::new("SALVAR", vec2(EDITOR_W - 90.0 - 86.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
             // "CARREGAR" tem 2 letras a mais que "SALVAR"/"LIMPAR" — caixa
@@ -336,6 +355,8 @@ impl DuelScene {
             // resultado real de validar um script vazio (nenhuma chamada,
             // nenhum ciclo) — não é um placeholder otimista.
             live_check: LiveCheck::Valid { cycles_used: 0, truncated: false },
+            rehearsal: None,
+            show_rehearsal: false,
         }
     }
 
@@ -364,6 +385,7 @@ impl DuelScene {
     pub fn update(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &mut SaveData) -> Option<DuelOutcome> {
         let mouse: Vec2 = mouse_position().into();
         self.btn_execute.update_hover(mouse);
+        self.btn_rehearse.update_hover(mouse);
         self.btn_leave.update_hover(mouse);
         self.btn_clear.update_hover(mouse);
         self.btn_save_script.update_hover(mouse);
@@ -371,6 +393,10 @@ impl DuelScene {
         // regra 2: Executar fica desabilitado enquanto o turno está sendo
         // reproduzido — a proteção mora no próprio Button, não espalhada.
         self.btn_execute.disabled = matches!(self.phase, Phase::Executing { .. });
+        // RFC-027 regra 5: Ensaiar não teria efeito visível durante o
+        // replay do turno real (mesmo texto do editor que já foi
+        // consumido) — desabilitado pelo mesmo motivo do Executar acima.
+        self.btn_rehearse.disabled = matches!(self.phase, Phase::Executing { .. });
         // RFC-026 regra 2: abrir a lista não faz sentido no meio do replay
         // do turno (mesmo motivo de Executar acima).
         self.btn_load_script.disabled = matches!(self.phase, Phase::Executing { .. });
@@ -438,6 +464,16 @@ impl DuelScene {
             return None;
         }
 
+        // RFC-027 regra 5: o painel do Ensaio é uma sobreposição modal, mesmo
+        // padrão de `show_load_menu` acima — enquanto está aberto, consome o
+        // frame inteiro (só ESC ou clicar ENSAIAR de novo fecha).
+        if self.show_rehearsal {
+            if is_key_pressed(KeyCode::Escape) || self.btn_rehearse.clicked(mouse) {
+                self.show_rehearsal = false;
+            }
+            return None;
+        }
+
         let writing = matches!(self.phase, Phase::Writing | Phase::Error(_));
         if writing {
             for (i, cmd) in COMMANDS.iter().enumerate() {
@@ -462,8 +498,17 @@ impl DuelScene {
                 // texto atual — nunca uma heurística, nunca um valor
                 // desatualizado da última edição.
                 self.live_check = Self::compute_live_check(&self.editor.text(), player, monster, save, &self.player_vars);
-                let want_run = self.btn_execute.clicked(mouse) || is_key_pressed(KeyCode::F5);
-                if want_run {
+                // RFC-027 regra 1: atalho `Shift+F5` para ENSAIAR — `F5`
+                // sozinho continua sendo EXECUTAR (regra 1 confirma isso
+                // olhando o `is_key_pressed(KeyCode::F5)` logo abaixo, já
+                // existente antes desta RFC). `shift` decide qual dos dois
+                // dispara, nunca os dois no mesmo frame.
+                let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+                let want_rehearse = self.btn_rehearse.clicked(mouse) || (shift && is_key_pressed(KeyCode::F5));
+                let want_run = self.btn_execute.clicked(mouse) || (is_key_pressed(KeyCode::F5) && !shift);
+                if want_rehearse {
+                    self.run_rehearsal(player, monster, save);
+                } else if want_run {
                     self.run_script(player, monster, save);
                 }
             }
@@ -541,8 +586,6 @@ impl DuelScene {
 
     fn run_script(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &SaveData) {
         self.turn += 1;
-        monster.begin_turn();
-        let special_ready = monster.special_ready();
         let src = self.editor.text();
         let program = match parser::parse(&src) {
             Ok(p) => p,
@@ -553,18 +596,16 @@ impl DuelScene {
             }
         };
 
-        let result = vm::run_turn_with_bag(
+        // RFC-027: `vm::simulate_turn` é a mesma rotina que
+        // `script::rehearsal::rehearse` chama sobre um clone — extraída pra
+        // que o turno real e o Ensaio nunca divirjam na progressão de
+        // carga/postura/consumo de carga especial.
+        let result = vm::simulate_turn(
             &program,
             &mut self.player_vars,
-            monster.spec.cycle_budget,
+            monster,
             player.life_points,
             player.max_life,
-            monster.life,
-            monster.spec.max_life,
-            monster.posture,
-            monster.spec.weakness,
-            monster.spec.base_damage,
-            special_ready,
             Some(&save.loadout),
             save.player_class,
             Some(&save.bag),
@@ -573,10 +614,6 @@ impl DuelScene {
         match result {
             Ok(r) => {
                 player.life_points = r.player_life;
-                monster.life = r.enemy_life;
-                if r.events.iter().any(|e| matches!(e, TurnEvent::CounterAttack { special: true, .. })) {
-                    monster.consume_charge();
-                }
                 self.phase = Phase::Executing { result: r, index: 0, timer: EVENT_TICK_SECONDS };
             }
             Err(e) => {
@@ -584,6 +621,36 @@ impl DuelScene {
                 self.phase = Phase::Error(e);
             }
         }
+    }
+
+    /// ENSAIAR (RFC-027): nunca recebe `&mut` de `player`/`monster` —
+    /// prova, em nível de tipo, que esta função é incapaz de tocar o
+    /// estado real, além do teste que compara bit-a-bit em
+    /// `script::rehearsal`. Erro de sintaxe/tipo mostra o mesmo erro que
+    /// EXECUTAR mostraria (regra 2) e não avança `self.turn` nem chama
+    /// `rehearse` — ENSAIAR nunca custa um turno real (regra 5).
+    fn run_rehearsal(&mut self, player: &Entity, monster: &MonsterState, save: &SaveData) {
+        let src = self.editor.text();
+        let program = match parser::parse(&src) {
+            Ok(p) => p,
+            Err(e) => {
+                self.log.push((format!("Erro: {e}"), theme::SANGUE));
+                self.phase = Phase::Error(e);
+                return;
+            }
+        };
+        let report = rehearsal::rehearse(
+            &program,
+            &self.player_vars,
+            player.life_points,
+            player.max_life,
+            monster,
+            Some(&save.loadout),
+            save.player_class,
+            Some(&save.bag),
+        );
+        self.rehearsal = Some(report);
+        self.show_rehearsal = true;
     }
 
     /// RFC-018: validação ao vivo do texto atual do editor — parser real
@@ -630,6 +697,11 @@ impl DuelScene {
         self.draw_dossier_and_log(assets, monster);
         if self.show_load_menu {
             self.draw_load_overlay(assets, save);
+        }
+        if self.show_rehearsal {
+            if let Some(report) = &self.rehearsal {
+                self.draw_rehearsal_overlay(assets, report);
+            }
         }
     }
 
@@ -738,6 +810,7 @@ impl DuelScene {
         self.draw_command_palette(assets, box_y + box_h + 12.0);
 
         self.btn_execute.draw(&assets.font_title);
+        self.btn_rehearse.draw(&assets.font_title);
         self.btn_leave.draw(&assets.font_title);
     }
 
@@ -864,6 +937,69 @@ impl DuelScene {
             let preview = script.body.lines().next().unwrap_or("");
             let summary = format!("{lines} linha(s) - {preview}");
             draw_text_ex(&summary, r.x + 12.0, r.y + 42.0, TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::POEIRA, ..Default::default() });
+        }
+    }
+
+    /// RFC-027: painel do Ensaio Geral — lista compacta por turno (regra 4),
+    /// mais o desfecho da simulação. Não reaproveita `draw_log` de
+    /// propósito (não-objetivo da RFC): é informação de um ensaio, não o
+    /// registro do duelo real, e merecia ficar visualmente distinto pra não
+    /// ser confundido com um resultado que já aconteceu de verdade.
+    fn draw_rehearsal_overlay(&self, assets: &Assets, report: &rehearsal::RehearsalReport) {
+        draw_rectangle(0.0, 0.0, WIDTH, HEIGHT, Color::new(0.0, 0.0, 0.0, 0.7));
+
+        let panel_x = WIDTH * 0.15;
+        let panel_w = WIDTH * 0.7;
+        let panel_y = 80.0;
+        let panel_h = HEIGHT - panel_y - 40.0;
+        draw_rectangle(panel_x, panel_y, panel_w, panel_h, theme::PEDRA);
+        draw_rectangle_lines(panel_x, panel_y, panel_w, panel_h, 3.0, theme::OURO);
+
+        draw_text_ex(
+            "ENSAIO GERAL - SIMULACAO SOBRE UM CLONE (ESC OU ENSAIAR PARA FECHAR)",
+            panel_x + 16.0,
+            panel_y + 28.0,
+            TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::PAPIRO, ..Default::default() },
+        );
+
+        let (end_text, end_color) = match &report.end {
+            RehearsalEnd::MonsterDied => ("VITORIA SIMULADA".to_string(), theme::VIDA),
+            RehearsalEnd::PlayerDied => ("DERROTA SIMULADA".to_string(), theme::SANGUE),
+            RehearsalEnd::TurnCapReached => (format!("TETO DE {} TURNOS ATINGIDO - O DUELO NAO FECHOU", rehearsal::REHEARSAL_TURN_CAP), theme::CHAMA),
+            RehearsalEnd::Error(e) => (format!("ERRO NO MEIO DA SIMULACAO: {e}"), theme::SANGUE),
+        };
+        draw_text_ex(
+            format!("{end_text} - {} turno(s) simulado(s)", report.turns.len()),
+            panel_x + 16.0,
+            panel_y + 52.0,
+            TextParams { font: Some(&assets.font_title), font_size: theme::TITLE_SM, color: end_color, ..Default::default() },
+        );
+
+        let row_h = 20.0;
+        let list_y0 = panel_y + 76.0;
+        let max_rows = ((panel_h - 76.0 - 16.0) / row_h).floor() as usize;
+        for (i, t) in report.turns.iter().take(max_rows).enumerate() {
+            let y = list_y0 + i as f32 * row_h;
+            let color = if t.truncated { theme::SANGUE } else { theme::POEIRA };
+            let line = format!(
+                "turno {:02}: {} dano causado - ciclos {}/{}{} - {} no jogador",
+                t.turn,
+                t.damage_dealt,
+                t.cycles_used,
+                t.cycle_budget,
+                if t.truncated { " (estourou)" } else { "" },
+                if t.damage_taken >= 0 { format!("-{}", t.damage_taken) } else { format!("+{}", -t.damage_taken) },
+            );
+            draw_text_ex(&line, panel_x + 16.0, y + 16.0, TextParams { font: Some(&assets.font_body), font_size: 14, color, ..Default::default() });
+        }
+        if report.turns.len() > max_rows {
+            let y = list_y0 + max_rows as f32 * row_h;
+            draw_text_ex(
+                format!("... e mais {} turno(s) (nao exibidos)", report.turns.len() - max_rows),
+                panel_x + 16.0,
+                y + 16.0,
+                TextParams { font: Some(&assets.font_body), font_size: 14, color: theme::POEIRA, ..Default::default() },
+            );
         }
     }
 

@@ -8,5 +8,6 @@ pub mod ast;
 pub mod error;
 pub mod lexer;
 pub mod parser;
+pub mod rehearsal;
 pub mod value;
 pub mod vm;

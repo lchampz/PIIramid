@@ -450,6 +450,18 @@ impl DuelScene {
         Rect::new(x, y, w, 48.0)
     }
 
+    /// QA (ALTO-2, auditoria de interação RFC-023/026-030): `true` enquanto
+    /// qualquer overlay modal (CARREGAR/RFC-026, ENSAIAR/RFC-027, escolha de
+    /// função/RFC-030) está aberto -- cada um documenta "ESC fecha/pula" como
+    /// comportamento próprio, mas `main.rs` consumia esse mesmo `ESC` pra
+    /// abrir o menu de pausa antes de `DuelScene::update()` rodar, então o
+    /// overlay nunca via a tecla. `PhaseScene`/`main.rs` consultam isto pra
+    /// decidir: com um overlay aberto, o `ESC` deste frame pertence à cena,
+    /// não à pausa.
+    pub fn has_modal_overlay_open(&self) -> bool {
+        self.show_load_menu || self.show_rehearsal || self.show_compile_choice
+    }
+
     pub fn update(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &mut SaveData) -> Option<DuelOutcome> {
         let mouse: Vec2 = mouse_position().into();
         self.btn_execute.update_hover(mouse);
@@ -494,20 +506,35 @@ impl DuelScene {
             }
         }
 
-        if self.btn_leave.clicked(mouse) {
-            return Some(DuelOutcome::Fled);
-        }
-        if self.btn_clear.clicked(mouse) {
-            self.editor.clear();
-        }
-        if self.btn_save_script.clicked(mouse) {
-            self.save_current_script(save);
-        }
-        if self.btn_load_script.clicked(mouse) {
-            if save.scripts.is_empty() {
-                self.log.push(("Nenhum script salvo para carregar.".to_string(), theme::POEIRA));
-            } else {
-                self.show_load_menu = !self.show_load_menu;
+        // QA (achado de interação RFC-026/027/030): FUGIR/LIMPAR/SALVAR/
+        // CARREGAR eram checados aqui incondicionalmente, antes dos blocos
+        // modais abaixo -- um clique nas coordenadas desses botões
+        // (visualmente cobertos pelo retângulo full-screen de qualquer um
+        // dos três overlays) ainda disparava a ação real por baixo (fugir,
+        // limpar o editor, salvar, ou abrir CARREGAR por cima de outro
+        // overlay já aberto, deixando dois `show_*` simultaneamente `true`
+        // e os dois desenhados empilhados em `draw()`). Nenhum dos três
+        // overlays é de fato modal para clique, só visualmente. Guarda
+        // única: enquanto qualquer um estiver aberto, nenhum desses quatro
+        // botões reage -- cada overlay continua resolvendo seu próprio
+        // fechamento/clique nos blocos abaixo, sem mudança de comportamento
+        // para o caso comum (nenhum overlay aberto).
+        if !self.has_modal_overlay_open() {
+            if self.btn_leave.clicked(mouse) {
+                return Some(DuelOutcome::Fled);
+            }
+            if self.btn_clear.clicked(mouse) {
+                self.editor.clear();
+            }
+            if self.btn_save_script.clicked(mouse) {
+                self.save_current_script(save);
+            }
+            if self.btn_load_script.clicked(mouse) {
+                if save.scripts.is_empty() {
+                    self.log.push(("Nenhum script salvo para carregar.".to_string(), theme::POEIRA));
+                } else {
+                    self.show_load_menu = !self.show_load_menu;
+                }
             }
         }
 

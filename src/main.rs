@@ -77,11 +77,23 @@ async fn main() {
         // frame (RFC-023, tabela de riscos).
         let pauseable = matches!(scene, Scene::Overworld(_) | Scene::Phase(_));
 
+        // QA (ALTO-2, auditoria de interação RFC-023/026-030): um overlay
+        // modal de `DuelScene` (CARREGAR/RFC-026, ENSAIAR/RFC-027, escolha
+        // de função/RFC-030) documenta "ESC fecha/pula" como comportamento
+        // próprio -- mas este bloco consumia o mesmo `ESC` pra abrir a pausa
+        // antes de `scene.update()` sequer rodar, então o overlay nunca via
+        // a tecla e a pausa abria por cima dele, congelado. Só suprime o
+        // toggle quando a pausa ainda NÃO está ativa (abrir): com a pausa já
+        // ativa, `scene.update()` não roda mesmo (regra 3 da RFC-019), então
+        // não há overlay novo se abrindo nesse meio tempo e `ESC` fechar a
+        // pausa continua seguro.
+        let scene_wants_escape_first = matches!(&scene, Scene::Phase(p) if p.has_modal_overlay_open());
+
         // RFC-019 regra 2: único lugar que lê `ESC` para pausa -- alterna.
         // `PauseOverlay::update` (abaixo) nunca lê `ESC`, só clique nos
         // botões, senão o mesmo toggle aconteceria duas vezes no mesmo
         // frame (pausa e despausa de volta sem o jogador perceber).
-        if pauseable && is_key_pressed(KeyCode::Escape) {
+        if pauseable && is_key_pressed(KeyCode::Escape) && (!scene_wants_escape_first || paused) {
             paused = !paused;
             // achado #7: ESC fecha a pausa sem passar por
             // `PauseOverlay::update` (que só reseta a confirmação de

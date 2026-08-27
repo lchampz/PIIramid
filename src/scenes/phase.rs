@@ -33,6 +33,18 @@ pub struct PhaseScene {
 }
 
 impl PhaseScene {
+    /// QA (ALTO-2): delega pra `DuelScene` -- `main.rs` consulta isto antes
+    /// de tratar `ESC` como toggle de pausa (regra 2 da RFC-019), pra que um
+    /// overlay modal aberto (CARREGAR/ENSAIAR/escolha de função) tenha
+    /// prioridade sobre a pausa nesse frame, em vez do `ESC` ser consumido
+    /// antes de `DuelScene::update()` sequer rodar.
+    pub fn has_modal_overlay_open(&self) -> bool {
+        match &self.inner {
+            Inner::Active { duel, .. } => duel.has_modal_overlay_open(),
+            Inner::Complete => false,
+        }
+    }
+
     pub fn new(save: SaveData) -> Self {
         let inner = match PHASES.get(save.current_phase) {
             Some((kind, spec_fn)) => {

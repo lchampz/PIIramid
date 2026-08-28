@@ -14,6 +14,7 @@ use macroquad::prelude::*;
 
 use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
+use crate::screen_scale::virtual_mouse_position;
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::theme;
 
@@ -77,7 +78,7 @@ impl PauseOverlay {
     /// substitui `OverworldScene::update()` no loop principal, nada além
     /// de hover/clique dos botões acontece).
     pub fn update(&mut self) -> Option<PauseAction> {
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         self.btn_continue.update_hover(mouse);
         self.btn_menu.update_hover(mouse);
 

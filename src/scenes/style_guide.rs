@@ -7,6 +7,7 @@ use macroquad::prelude::*;
 use crate::assets::Assets;
 use crate::config::WIDTH;
 use crate::scenes::Transition;
+use crate::screen_scale::virtual_mouse_position;
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::theme;
 
@@ -20,7 +21,7 @@ impl StyleGuideScene {
     }
 
     pub fn update(&mut self) -> Option<Transition> {
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         self.btn_back.update_hover(mouse);
         if self.btn_back.clicked(mouse) || is_key_pressed(KeyCode::Escape) {
             return Some(Transition::GoToMenu { last_drop: None });

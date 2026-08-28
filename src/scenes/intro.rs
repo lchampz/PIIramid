@@ -16,6 +16,7 @@ use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
 use crate::inventory::SaveData;
 use crate::scenes::Transition;
+use crate::screen_scale::virtual_mouse_position;
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::theme;
 
@@ -75,7 +76,7 @@ impl IntroScene {
     }
 
     pub fn update(&mut self) -> Option<Transition> {
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         self.btn_skip.update_hover(mouse);
 
         // RFC-023 regra 6: pulável a qualquer momento -- ESC ou o botão.

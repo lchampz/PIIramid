@@ -8,6 +8,10 @@ use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
 use crate::inventory::SaveData;
 use crate::scenes::Transition;
+// RFC-031: `mouse_position()` do macroquad devolve coordenadas da janela
+// real, não do canvas virtual 1280x720 que esta cena desenha -- ver
+// `screen_scale.rs` para o porquê da troca mecânica de nome de função.
+use crate::screen_scale::virtual_mouse_position;
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::theme;
 
@@ -47,7 +51,7 @@ impl GameOverScene {
     }
 
     pub fn update(&mut self) -> Option<Transition> {
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         self.btn_restart.update_hover(mouse);
         self.btn_menu.update_hover(mouse);
 

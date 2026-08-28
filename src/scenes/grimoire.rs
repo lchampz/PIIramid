@@ -14,6 +14,7 @@ use crate::assets::Assets;
 use crate::config::WIDTH;
 use crate::inventory::{Item, PlayerClass, SaveData};
 use crate::scenes::Transition;
+use crate::screen_scale::virtual_mouse_position;
 use crate::script::value::ItemKind;
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::theme;
@@ -46,7 +47,7 @@ impl GrimoireScene {
     }
 
     pub fn update(&mut self) -> Option<Transition> {
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         self.btn_back.update_hover(mouse);
 
         if is_mouse_button_pressed(MouseButton::Left) {

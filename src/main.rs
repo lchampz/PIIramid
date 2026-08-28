@@ -8,6 +8,7 @@ mod grade;
 mod inventory;
 mod monsters;
 mod scenes;
+mod screen_scale;
 mod script;
 mod ui;
 mod world;
@@ -54,6 +55,13 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     let assets = Assets::load().await;
+
+    // RFC-031: canvas virtual de 1280x720 renderizado numa textura offscreen
+    // e depois desenhado na janela real, escalado e centralizado com
+    // letterbox -- criado uma única vez, fora do loop de frame (regra da
+    // squad: sem alocação desnecessária no loop de frame).
+    let render_target = screen_scale::make_render_target();
+    let virtual_camera = screen_scale::virtual_camera(&render_target);
 
     let mut scene = Scene::Menu(MenuScene::new(&assets, None));
 
@@ -143,6 +151,12 @@ async fn main() {
             paused = false;
         }
 
+        // RFC-031: todo o desenho deste frame (cenas + overlay de pausa) vai
+        // para o render target de 1280x720, não direto pra janela real --
+        // é o que permite escalar o resultado inteiro de uma vez só, sem
+        // que nenhuma cena precise saber do tamanho real da janela.
+        set_camera(&virtual_camera);
+
         match &scene {
             Scene::Menu(s) => s.draw(&assets),
             Scene::Overworld(s) => s.draw(&assets),
@@ -158,6 +172,11 @@ async fn main() {
         if pauseable && paused {
             pause_overlay.draw(&assets);
         }
+
+        // Volta a desenhar direto na janela real e faz o blit do canvas
+        // virtual escalado e centralizado (letterbox preto nas bordas).
+        set_default_camera();
+        screen_scale::draw_letterboxed(&render_target);
 
         next_frame().await;
 

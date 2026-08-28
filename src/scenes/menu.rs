@@ -9,6 +9,7 @@ use crate::config::{HEIGHT, WIDTH};
 use crate::inventory::SaveData;
 use crate::monsters::PHASES;
 use crate::scenes::Transition;
+use crate::screen_scale::virtual_mouse_position;
 use crate::ui::theme;
 
 const LEFT_W: f32 = 620.0;
@@ -270,7 +271,7 @@ impl MenuScene {
             self.entry_skipped = true;
         }
 
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         let items = Self::items();
         self.hovered = None;
         for (i, _item) in items.iter().enumerate() {

@@ -14,6 +14,7 @@ use crate::inventory::{SaveData, SavedScript};
 use crate::monsters::{MonsterState, Weakness};
 use crate::script::error::ScriptError;
 use crate::script::parser;
+use crate::screen_scale::virtual_mouse_position;
 use crate::script::rehearsal::{self, RehearsalEnd};
 use crate::script::value::{ItemKind, Value};
 use crate::script::vm::{self, TurnEvent, TurnResult};
@@ -473,7 +474,7 @@ impl DuelScene {
     }
 
     pub fn update(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &mut SaveData) -> Option<DuelOutcome> {
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         self.btn_execute.update_hover(mouse);
         self.btn_rehearse.update_hover(mouse);
         self.btn_leave.update_hover(mouse);
@@ -1099,7 +1100,7 @@ impl DuelScene {
 
         for (i, script) in save.scripts.iter().enumerate() {
             let r = Self::load_card_rect(i);
-            let hovered = r.contains(mouse_position().into());
+            let hovered = r.contains(virtual_mouse_position().into());
             let border = if hovered { theme::POEIRA } else { theme::TIJOLO };
             draw_rectangle(r.x, r.y, r.w, r.h, theme::PEDRA);
             draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, border);
@@ -1195,7 +1196,7 @@ impl DuelScene {
             TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::POEIRA, ..Default::default() },
         );
 
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         for (i, name) in self.compile_choice_names.iter().enumerate() {
             let r = Self::compile_choice_card_rect(i);
             let hovered = r.contains(mouse);

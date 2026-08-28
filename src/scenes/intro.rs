@@ -18,6 +18,7 @@ use crate::inventory::SaveData;
 use crate::scenes::Transition;
 use crate::screen_scale::virtual_mouse_position;
 use crate::ui::button::{Button, ButtonStyle};
+use crate::ui::text::wrap_text;
 use crate::ui::theme;
 
 /// RFC-023 regra 5 — 5 painéis, 2 linhas cada, avanço por clique/tecla,
@@ -26,7 +27,7 @@ use crate::ui::theme;
 /// hoje, e o precedente pesa mais que a leitura ligeiramente mais fácil
 /// da versão acentuada (texto do `[[storyteller]]`, RFC-023-entrega
 /// dele traz a variante acentuada como alternativa registrada).
-const INTRO_PANELS: &[[&str; 2]] = &[
+pub(crate) const INTRO_PANELS: &[[&str; 2]] = &[
     [
         "Voce entrou sozinho na piramide, como todo explorador entra.",
         "Sem exercito, sem bencao - so voce, e a areia se fechando atras.",
@@ -52,6 +53,16 @@ const INTRO_PANELS: &[[&str; 2]] = &[
 /// RFC-023 regra 6 — rótulo do botão de pular, mesmo padrão
 /// maiúsculo/sem acento dos itens de `menu.rs`.
 const SKIP_LABEL: &str = "PULAR [ESC]";
+
+/// Largura e padding horizontal do card central -- nomeados porque
+/// `draw()` os usa duas vezes cada (posição do card, quebra de linha) e
+/// `ui::text::tests` precisa do mesmo número que a tela usa de verdade
+/// pra provar que a quebra de linha não ultrapassa a borda (RFC-034).
+const CARD_W: f32 = 760.0;
+const CARD_PAD_X: f32 = 44.0;
+/// Largura útil real do texto dentro do card -- card menos o padding dos
+/// dois lados.
+pub(crate) const PANEL_TEXT_MAX_WIDTH: f32 = CARD_W - CARD_PAD_X * 2.0;
 
 pub struct IntroScene {
     save: Box<SaveData>,
@@ -110,7 +121,7 @@ impl IntroScene {
             DrawTextureParams { dest_size: Some(vec2(WIDTH, HEIGHT)), ..Default::default() },
         );
 
-        let card_w = 760.0;
+        let card_w = CARD_W;
         let card_h = 300.0;
         let card_x = (WIDTH - card_w) / 2.0;
         let card_y = HEIGHT / 2.0 - card_h / 2.0;
@@ -136,13 +147,13 @@ impl IntroScene {
 
         let [line1, line2] = INTRO_PANELS[self.panel];
         let mut y = card_y + 110.0;
-        for line in wrap_text(line1, 58) {
-            draw_text_ex(&line, card_x + 44.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
+        for line in wrap_text(line1, &assets.font_body, theme::BODY_LG, PANEL_TEXT_MAX_WIDTH) {
+            draw_text_ex(&line, card_x + CARD_PAD_X, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
             y += 26.0;
         }
         y += 12.0;
-        for line in wrap_text(line2, 58) {
-            draw_text_ex(&line, card_x + 44.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
+        for line in wrap_text(line2, &assets.font_body, theme::BODY_LG, PANEL_TEXT_MAX_WIDTH) {
+            draw_text_ex(&line, card_x + CARD_PAD_X, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
             y += 26.0;
         }
 
@@ -166,20 +177,3 @@ fn any_key_pressed_except_escape() -> bool {
     get_last_key_pressed().is_some_and(|k| k != KeyCode::Escape)
 }
 
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.len() + word.len() + 1 > max_chars && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}

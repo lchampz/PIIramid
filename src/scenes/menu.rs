@@ -10,6 +10,7 @@ use crate::inventory::SaveData;
 use crate::monsters::PHASES;
 use crate::scenes::Transition;
 use crate::screen_scale::virtual_mouse_position;
+use crate::ui::text::wrap_text;
 use crate::ui::theme;
 
 const LEFT_W: f32 = 620.0;
@@ -18,8 +19,14 @@ const LEFT_W: f32 = 620.0;
 /// constante porque tanto `draw()` (desenha) quanto `MenuScene::new()`
 /// (calcula onde o bloco de status termina, ver `status_block_bottom`)
 /// precisam da mesma string pra concordar em quantas linhas ela ocupa.
-const DESC_TEXT: &str =
+pub(crate) const DESC_TEXT: &str =
     "Escreva o roteiro do seu turno. A piramide executa linha por linha - e nao perdoa parenteses abertos.";
+/// Largura útil real da descrição -- mesma margem simétrica de 60px de
+/// cada lado que `item_rect()` já usa pra lista de navegação logo abaixo
+/// (`Rect::new(60.0, y, LEFT_W - 120.0, ...)`), nomeada aqui porque
+/// `ui::text::tests` precisa do valor real pra provar que a quebra de
+/// linha não ultrapassa a coluna esquerda (RFC-034).
+pub(crate) const DESC_TEXT_MAX_WIDTH: f32 = LEFT_W - 120.0;
 
 // MÉDIO-1 (QA-023-030): item_rect() dos itens da lista de navegação usava
 // uma constante fixa (`380.0 + index*58.0`) que não sabia quanto texto de
@@ -49,13 +56,13 @@ const LIST_BOTTOM_LIMIT: f32 = HEIGHT - 28.0;
 /// Posição vertical (em pixels, mesmo espaço de `draw()`) onde o bloco de
 /// status (linha "PROGRESSO..." + `last_drop`, se houver) termina de
 /// desenhar. Espelha exatamente a aritmética que `draw()` usa para
-/// posicionar esses textos (linha 310 + `wrap_text(DESC_TEXT, 46)` +
+/// posicionar esses textos (linha 310 + `wrap_text(DESC_TEXT, ...)` +
 /// gap de 8px + 24px por linha de `last_drop`) -- ver comentário de
 /// `MenuScene::new` sobre por que isso é calculado uma única vez.
-fn status_block_bottom(next_room: Option<&'static str>, last_drop: &Option<String>) -> f32 {
+fn status_block_bottom(font_body: &Font, next_room: Option<&'static str>, last_drop: &Option<String>) -> f32 {
     let _ = next_room; // a linha "PROGRESSO"/"PIRAMIDE CONCLUIDA" ocupa 1 linha em ambos os casos
     let mut y = 310.0;
-    for _line in wrap_text(DESC_TEXT, 46) {
+    for _line in wrap_text(DESC_TEXT, font_body, theme::BODY_LG, DESC_TEXT_MAX_WIDTH) {
         y += 24.0;
     }
     y += 8.0;
@@ -203,10 +210,10 @@ pub struct MenuScene {
 }
 
 impl MenuScene {
-    pub fn new(_assets: &Assets, last_drop: Option<String>) -> Self {
+    pub fn new(assets: &Assets, last_drop: Option<String>) -> Self {
         let save = SaveData::load();
         let next_room = PHASES.get(save.current_phase).map(|(_, spec_fn)| spec_fn().room);
-        let status_bottom = status_block_bottom(next_room, &last_drop);
+        let status_bottom = status_block_bottom(&assets.font_body, next_room, &last_drop);
         let (list_start_y, item_spacing, item_h) = compute_list_layout(status_bottom, Self::items().len());
         MenuScene {
             hovered: None,
@@ -345,7 +352,7 @@ impl MenuScene {
         draw_rectangle(60.0, 275.0 + logo_offset_y, 140.0, 5.0, Color::new(theme::OURO.r, theme::OURO.g, theme::OURO.b, logo_progress));
 
         let mut y = 310.0;
-        for line in wrap_text(DESC_TEXT, 46) {
+        for line in wrap_text(DESC_TEXT, &assets.font_body, theme::BODY_LG, DESC_TEXT_MAX_WIDTH) {
             draw_text_ex(&line, 60.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::POEIRA, ..Default::default() });
             y += 24.0;
         }
@@ -444,20 +451,3 @@ impl MenuScene {
     }
 }
 
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.len() + word.len() + 1 > max_chars && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}

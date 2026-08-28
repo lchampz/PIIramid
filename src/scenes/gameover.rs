@@ -13,7 +13,25 @@ use crate::scenes::Transition;
 // `screen_scale.rs` para o porquê da troca mecânica de nome de função.
 use crate::screen_scale::virtual_mouse_position;
 use crate::ui::button::{Button, ButtonStyle};
+use crate::ui::text::wrap_text;
 use crate::ui::theme;
+
+/// Largura e padding horizontal do card central -- mesmos números que
+/// `intro.rs` usa pro seu próprio card (telas irmãs no mesmo layout),
+/// nomeados aqui pelo mesmo motivo: `draw()` os usa mais de uma vez e
+/// `ui::text::tests` precisa do valor real pra provar que a quebra de
+/// linha do texto de sabor não ultrapassa a borda (RFC-034).
+const CARD_W: f32 = 760.0;
+const CARD_PAD_X: f32 = 44.0;
+/// Largura útil real do texto de sabor dentro do card.
+pub(crate) const FLAVOR_MAX_TEXT_WIDTH: f32 = CARD_W - CARD_PAD_X * 2.0;
+
+/// Texto de sabor da vitória final (Sentença Eterna cumprida) -- extraído
+/// pra constante porque `ui::text::tests` precisa da mesma string que
+/// `draw()` desenha, sem duplicar o literal (RFC-034).
+pub(crate) const FLAVOR_WON: &str = "O ultimo guardiao desmorona. A Sentenca Eterna reconhece sua escrita - a piramide se abre.";
+/// Texto de sabor da derrota -- mesmo motivo de `FLAVOR_WON`.
+pub(crate) const FLAVOR_LOST: &str = "Seu roteiro travou no ultimo ciclo. A piramide guarda seus papiros - e seu corpo.";
 
 pub struct GameOverScene {
     won: bool,
@@ -90,7 +108,7 @@ impl GameOverScene {
             DrawTextureParams { dest_size: Some(vec2(WIDTH, HEIGHT)), ..Default::default() },
         );
 
-        let card_w = 760.0;
+        let card_w = CARD_W;
         let card_h = 420.0;
         let card_x = (WIDTH - card_w) / 2.0;
         let card_y = HEIGHT / 2.0 - card_h / 2.0 - 40.0;
@@ -112,14 +130,10 @@ impl GameOverScene {
         let title = if self.won { "SENTENCA CUMPRIDA" } else { "VOCE CAIU" };
         draw_text_ex(title, card_x + 44.0, card_y + 100.0, TextParams { font: Some(&assets.font_title), font_size: theme::TITLE_LG, color: accent, ..Default::default() });
 
-        let flavor = if self.won {
-            "O ultimo guardiao desmorona. A Sentenca Eterna reconhece sua escrita - a piramide se abre."
-        } else {
-            "Seu roteiro travou no ultimo ciclo. A piramide guarda seus papiros - e seu corpo."
-        };
+        let flavor = if self.won { FLAVOR_WON } else { FLAVOR_LOST };
         let mut y = card_y + 140.0;
-        for line in wrap_text(flavor, 58) {
-            draw_text_ex(&line, card_x + 44.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
+        for line in wrap_text(flavor, &assets.font_body, theme::BODY_LG, FLAVOR_MAX_TEXT_WIDTH) {
+            draw_text_ex(&line, card_x + CARD_PAD_X, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
             y += 24.0;
         }
 
@@ -167,20 +181,3 @@ impl GameOverScene {
     }
 }
 
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.len() + word.len() + 1 > max_chars && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}

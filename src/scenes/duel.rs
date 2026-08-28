@@ -21,6 +21,7 @@ use crate::script::value::{ItemKind, Value};
 use crate::script::vm::{self, TurnEvent, TurnResult};
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::code_editor::CodeEditor;
+use crate::ui::text::wrap_text;
 use crate::ui::theme;
 use crate::world::entity::{Entity, Kind};
 
@@ -28,6 +29,17 @@ const EVENT_TICK_SECONDS: f32 = 0.55;
 const TOP_BAR_H: f32 = 62.0;
 const EDITOR_W: f32 = 460.0;
 const SIDE_W: f32 = 300.0;
+/// Card do dossiê (`draw_dossier_and_log`) tem largura `SIDE_W - 20.0`;
+/// descrição do monstro e a nota extra de `Eficiencia` desenham a partir
+/// de `x + 12.0` -- padding nomeado aqui porque `ui::text::tests` precisa
+/// do mesmo número real pra provar que a quebra de linha não ultrapassa
+/// o painel (RFC-034).
+const DOSSIER_TEXT_PAD_X: f32 = 12.0;
+pub(crate) const DOSSIER_TEXT_MAX_WIDTH: f32 = (SIDE_W - 20.0) - DOSSIER_TEXT_PAD_X * 2.0;
+/// Painel do log (`draw_log`) tem a mesma largura de card, texto a partir
+/// de `x + 10.0` -- mesmo motivo de `DOSSIER_TEXT_PAD_X`.
+const LOG_TEXT_PAD_X: f32 = 10.0;
+const LOG_TEXT_MAX_WIDTH: f32 = (SIDE_W - 20.0) - LOG_TEXT_PAD_X * 2.0;
 const ARENA_X: f32 = EDITOR_W;
 const ARENA_W: f32 = WIDTH - EDITOR_W - SIDE_W;
 
@@ -1423,7 +1435,7 @@ impl DuelScene {
         let name_width = ac.candidates.iter().map(|c| measure_text(&c.name, Some(&assets.font_body), 14, 1.0).width).fold(0.0_f32, f32::max);
         let width = (name_width + PAD * 2.0).clamp(120.0, 220.0);
         let desc = ac.candidates[ac.selected].description;
-        let desc_lines = desc.map(|t| wrap_text_px(t, &assets.font_body, 12, width - PAD * 2.0)).unwrap_or_default();
+        let desc_lines = desc.map(|t| wrap_text(t, &assets.font_body, 12, width - PAD * 2.0)).unwrap_or_default();
         let desc_h = if desc_lines.is_empty() { 0.0 } else { 6.0 + desc_lines.len() as f32 * DESC_LINE_H };
         let list_h = ac.candidates.len() as f32 * ROW_H;
         let panel_h = list_h + desc_h;
@@ -1497,7 +1509,7 @@ impl DuelScene {
         // qual descrição mostrar.
         if let Some((i, cmd)) = COMMANDS.iter().enumerate().find(|(i, _)| self.command_cards[*i].hovered) {
             let r = Self::command_rect(i);
-            let lines = wrap_text_px(cmd.description, &assets.font_body, 12, r.w - 16.0);
+            let lines = wrap_text(cmd.description, &assets.font_body, 12, r.w - 16.0);
             let tip_h = 8.0 + lines.len() as f32 * 16.0;
             let tip_y = r.y - tip_h - 4.0;
             draw_rectangle(r.x, tip_y, r.w, tip_h, theme::PEDRA);
@@ -1828,7 +1840,7 @@ impl DuelScene {
         y += 20.0;
 
         for line in monster.spec.description {
-            for wrapped in wrap_text(line, 26) {
+            for wrapped in wrap_text(line, &assets.font_body, 14, DOSSIER_TEXT_MAX_WIDTH) {
                 draw_text_ex(&wrapped, x + 12.0, y, TextParams { font: Some(&assets.font_body), font_size: 14, color: theme::POEIRA, ..Default::default() });
                 y += 17.0;
             }
@@ -1841,7 +1853,7 @@ impl DuelScene {
         // (`max_ciclos`), so faltava desenhar.
         if let Weakness::Eficiencia { max_ciclos } = monster.spec.weakness {
             let extra = format!("So aguenta ate {max_ciclos} ciclos de execucao por turno.");
-            for wrapped in wrap_text(&extra, 26) {
+            for wrapped in wrap_text(&extra, &assets.font_body, 14, DOSSIER_TEXT_MAX_WIDTH) {
                 draw_text_ex(&wrapped, x + 12.0, y, TextParams { font: Some(&assets.font_body), font_size: 14, color: theme::POEIRA, ..Default::default() });
                 y += 17.0;
             }
@@ -1907,7 +1919,7 @@ impl DuelScene {
         // ultrapassar o fundo do painel.
         let mut flattened: Vec<(String, Color)> = Vec::new();
         for (line, color) in self.log.iter() {
-            for wrapped in wrap_text(line, 26) {
+            for wrapped in wrap_text(line, &assets.font_body, 14, LOG_TEXT_MAX_WIDTH) {
                 flattened.push((wrapped, *color));
             }
         }
@@ -1951,31 +1963,6 @@ const COLLECTIONS: &[&str] = &["espada", "magia", "escudo", "pocao", "eu", "inim
 /// `script::lexer` de propósito — aquele exige o texto lexar com
 /// sucesso, e perderia formatação exata (espaçamento, aspas) ao
 /// reconstituir do token.
-/// RFC-033: quebra `text` em linhas que cabem em `max_width` (medidas com
-/// `font`/`size`), palavra por palavra -- usado pela descrição do
-/// autocomplete e pelo tooltip da paleta de comandos, os dois textos livres
-/// desta cena que não cabem numa linha só num painel estreito. Uma única
-/// palavra maior que `max_width` sozinha (não deveria acontecer com as
-/// descrições curtas de `COMMANDS`, mas não é impossível) vira sua própria
-/// linha sem cortar caracteres -- prefere vazar um pouco a truncar texto.
-fn wrap_text_px(text: &str, font: &Font, size: u16, max_width: f32) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let candidate = if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
-        if !current.is_empty() && measure_text(&candidate, Some(font), size, 1.0).width > max_width {
-            lines.push(std::mem::take(&mut current));
-            current = word.to_string();
-        } else {
-            current = candidate;
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
 fn highlight_line(line: &str) -> Vec<(String, Color)> {
     let mut out = Vec::new();
     let chars: Vec<char> = line.chars().collect();
@@ -2035,24 +2022,6 @@ fn highlight_line(line: &str) -> Vec<(String, Color)> {
         }
     }
     out
-}
-
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.len() + word.len() + 1 > max_chars && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
 }
 
 fn event_line(ev: &TurnEvent) -> Option<usize> {

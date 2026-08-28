@@ -4,6 +4,7 @@
 //! flutuante, dossiê do monstro com tags de fraqueza e barra de
 //! intenção/carga, log de eventos colorido por categoria.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use macroquad::prelude::*;
@@ -275,21 +276,103 @@ struct CommandEntry {
     label: &'static str,
     snippet: &'static str,
     cost_label: &'static str,
+    /// RFC-033 regra 3: frase curta (~60-80 caracteres) de como usar o
+    /// comando -- mostrada no hover do cartão da paleta (`draw_command_palette`)
+    /// e reaproveitada como texto de apoio do autocomplete quando esta
+    /// entrada está destacada (`draw_autocomplete_panel`).
+    description: &'static str,
 }
 
 // Argumentos de item usam acesso "por enum" (`magia.Fogo`), sem aspas —
 // equivalente a `magia["fogo"]`, mas lido como um enum em vez de string
 // solta (ver script::vm::eval, caso Expr::Field sobre Value::Collection).
 const COMMANDS: &[CommandEntry] = &[
-    CommandEntry { label: "atacar(item)", snippet: "atacar(espada.Fogo)", cost_label: "2c" },
-    CommandEntry { label: "defender(item)", snippet: "defender(escudo.Bronze)", cost_label: "1c" },
-    CommandEntry { label: "inspecionar()", snippet: "inspecionar()", cost_label: "3c" },
-    CommandEntry { label: "curar(item)", snippet: "curar(pocao.Vida)", cost_label: "4c" },
-    CommandEntry { label: "esperar()", snippet: "esperar()", cost_label: "1c" },
-    CommandEntry { label: "if cond:", snippet: "if inimigo.postura == \"guarda\":\n    ", cost_label: "1c" },
-    CommandEntry { label: "while cond:", snippet: "while inimigo.vida > 0:\n    ", cost_label: "1c/it" },
-    CommandEntry { label: "for i in a..b:", snippet: "for i in 0..3:\n    ", cost_label: "1c/it" },
+    CommandEntry {
+        label: "atacar(item)",
+        snippet: "atacar(espada.Fogo)",
+        cost_label: "2c",
+        description: "Ataca o inimigo com o item indicado -- dano cheio so contra a fraqueza dele.",
+    },
+    CommandEntry {
+        label: "defender(item)",
+        snippet: "defender(escudo.Bronze)",
+        cost_label: "1c",
+        description: "Reduz a metade o proximo contra-ataque, usando o item de defesa indicado.",
+    },
+    CommandEntry {
+        label: "inspecionar()",
+        snippet: "inspecionar()",
+        cost_label: "3c",
+        description: "Revela a fraqueza escondida do inimigo pelo resto do duelo.",
+    },
+    CommandEntry {
+        label: "curar(item)",
+        snippet: "curar(pocao.Vida)",
+        cost_label: "4c",
+        description: "Recupera vida do jogador usando o item de cura indicado.",
+    },
+    CommandEntry {
+        label: "esperar()",
+        snippet: "esperar()",
+        cost_label: "1c",
+        description: "Passa o turno sem agir -- gasta 1 ciclo, nao causa nem sofre dano.",
+    },
+    CommandEntry {
+        label: "if cond:",
+        snippet: "if inimigo.postura == \"guarda\":\n    ",
+        cost_label: "1c",
+        description: "Executa o bloco abaixo so quando a condicao for verdadeira.",
+    },
+    CommandEntry {
+        label: "while cond:",
+        snippet: "while inimigo.vida > 0:\n    ",
+        cost_label: "1c/it",
+        description: "Repete o bloco enquanto a condicao for verdadeira -- 1 ciclo por checagem.",
+    },
+    CommandEntry {
+        label: "for i in a..b:",
+        snippet: "for i in 0..3:\n    ",
+        cost_label: "1c/it",
+        description: "Repete o bloco para cada valor de i entre a (incluso) e b (excluso).",
+    },
 ];
+
+/// RFC-033 regra 1: palavras-chave do lexer (`script/lexer.rs::lex_ident`)
+/// que não têm nenhum comando equivalente em `COMMANDS` -- `if`/`while`/`for`
+/// já entram na lista de candidatos via `command_identifier` (a primeira
+/// palavra do `label`), então não aparecem aqui de novo. Ordem fixa (mesma
+/// do `match` do lexer) porque a RFC proíbe ranking por uso -- só
+/// filtro por prefixo, ordem estável.
+const EXTRA_KEYWORDS: &[&str] = &["else", "in", "func", "invocar", "selecionar", "and", "e", "or", "ou", "not", "nao", "true", "verdadeiro", "false", "falso"];
+
+/// RFC-033 regra 1: um candidato do autocomplete -- `description` só existe
+/// para comandos nativos (vem de `CommandEntry::description`); palavra-chave
+/// e nome de `func` do jogador não têm descrição pronta.
+struct AutocompleteCandidate {
+    name: String,
+    description: Option<&'static str>,
+}
+
+/// RFC-033 regra 1/2: lista de sugestões ancorada no cursor -- `row`/
+/// `start_col` são a âncora (onde `identifier_prefix_before_cursor` disse
+/// que o prefixo começa) e é o que `replace_identifier_prefix` usa para
+/// completar sem tocar no resto da linha. `selected` é o índice destacado
+/// (setas/clique trocam, nunca o filtro).
+struct AutocompleteState {
+    row: usize,
+    start_col: usize,
+    candidates: Vec<AutocompleteCandidate>,
+    selected: usize,
+}
+
+/// Extrai a parte do `label` de um `CommandEntry` que é de fato o nome do
+/// comando/palavra-chave -- a sequência de caracteres de identificador no
+/// início (`atacar` de "atacar(item)", `if` de "if cond:"). É esse nome,
+/// não o `label` inteiro, que entra na lista de candidatos do autocomplete.
+fn command_identifier(label: &str) -> &str {
+    let end = label.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(label.len());
+    &label[..end]
+}
 
 pub struct DuelScene {
     editor: CodeEditor,
@@ -372,6 +455,21 @@ pub struct DuelScene {
     /// — só atrapalharia o clímax da vitória final. `OverworldScene` (mapa
     /// de debug, sem noção de campanha linear) sempre passa `false`.
     is_final_phase: bool,
+    /// RFC-033 regra 1: lista de sugestões ativa neste frame, ou `None` se
+    /// o cursor não está num prefixo de identificador ou nenhum candidato
+    /// combina. Recalculada em `recompute_autocomplete`, só durante
+    /// `Phase::Writing`.
+    autocomplete: Option<AutocompleteState>,
+    /// RFC-033 regra 2: retângulo de cada linha do painel de autocomplete
+    /// desenhado no frame anterior -- `draw_autocomplete_panel` (`&self`)
+    /// escreve aqui, `update` (`&mut self`, roda antes do próximo `draw`) lê
+    /// para decidir se um clique acertou alguma sugestão. Existe só por essa
+    /// ordem update-antes-de-draw: sem isto, `update` precisaria da mesma
+    /// medição de `font_code` que hoje só `draw` recebe (`Assets`), o que
+    /// obrigaria a passar `Assets` por `PhaseScene`/`OverworldScene`/
+    /// `main.rs` só para isto -- um frame de atraso no hit-test do clique é
+    /// imperceptível e evita esse refactor fora do escopo desta RFC.
+    autocomplete_rects: RefCell<Vec<Rect>>,
 }
 
 impl DuelScene {
@@ -417,6 +515,8 @@ impl DuelScene {
             last_run_funcs: Vec::new(),
             show_compile_choice: false,
             compile_choice_names: Vec::new(),
+            autocomplete: None,
+            autocomplete_rects: RefCell::new(Vec::new()),
         }
     }
 
@@ -446,6 +546,102 @@ impl DuelScene {
         let row = (index / 2) as f32;
         let w = (EDITOR_W - 20.0 - 8.0) / 2.0;
         Rect::new(10.0 + col * (w + 8.0), COMMAND_PANEL_Y + 26.0 + row * (COMMAND_ROW_H + COMMAND_ROW_GAP), w, COMMAND_ROW_H)
+    }
+
+    /// RFC-033 regra 1: tenta parsear o texto atual do editor e devolve os
+    /// nomes de `func` já escritos nele (`vm::defined_func_names`, mesma
+    /// função que RFC-030 usa para a tela de escolha pós-vitória). Um script
+    /// com erro de sintaxe no meio da digitação (o caso comum) simplesmente
+    /// não contribui nomes de func nesse frame -- não é um erro do
+    /// autocomplete, é a mesma limitação que já existe para qualquer análise
+    /// que dependa de um parse bem-sucedido (ver `compute_live_check` acima).
+    fn current_func_names(src: &str) -> Vec<String> {
+        match parser::parse(src) {
+            Ok(program) => vm::defined_func_names(&program),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// RFC-033 regra 1: lista completa (não filtrada) de candidatos do
+    /// autocomplete, nesta ordem estável: nomes de `COMMANDS` (ordem do
+    /// array), palavras-chave que faltam (`EXTRA_KEYWORDS`, ordem fixa),
+    /// nomes de `func` do script atual (ordem de definição). Duplicata por
+    /// nome é descartada mantendo a primeira ocorrência -- só pode
+    /// acontecer se o jogador nomear uma `func` igual a um comando/palavra-
+    /// chave, caso em que a descrição do comando nativo prevalece.
+    fn all_autocomplete_candidates(src: &str) -> Vec<AutocompleteCandidate> {
+        let mut out: Vec<AutocompleteCandidate> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+
+        for cmd in COMMANDS {
+            let name = command_identifier(cmd.label).to_string();
+            let key = name.to_lowercase();
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            out.push(AutocompleteCandidate { name, description: Some(cmd.description) });
+        }
+        for kw in EXTRA_KEYWORDS {
+            let key = kw.to_lowercase();
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            out.push(AutocompleteCandidate { name: kw.to_string(), description: None });
+        }
+        for name in Self::current_func_names(src) {
+            let key = name.to_lowercase();
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            out.push(AutocompleteCandidate { name, description: None });
+        }
+        out
+    }
+
+    /// RFC-033 regra 1: recalculada a cada frame de `Phase::Writing` em que
+    /// o autocomplete não foi explicitamente fechado/consumido por uma tecla
+    /// (Esc/Tab/Enter) ou navegado (setas) -- ver o bloco de `update()`.
+    /// Fecha a lista (`None`) quando o cursor não está num prefixo de
+    /// identificador (regra 1) ou quando nenhum candidato combina com o
+    /// prefixo (critério de aceite: "digitar algo que não combina com nada
+    /// não mostra lista nenhuma"). Preserva o `selected` atual quando a
+    /// âncora (linha/coluna de início) não mudou -- evita que o destaque
+    /// pule de volta pro topo a cada tecla digitada dentro do mesmo prefixo.
+    fn recompute_autocomplete(&mut self) {
+        let Some((start_col, prefix)) = self.editor.identifier_prefix_before_cursor() else {
+            self.autocomplete = None;
+            return;
+        };
+        let prefix_lower = prefix.to_lowercase();
+        let src = self.editor.text();
+        let candidates: Vec<AutocompleteCandidate> = Self::all_autocomplete_candidates(&src)
+            .into_iter()
+            .filter(|c| c.name.to_lowercase().starts_with(&prefix_lower))
+            .take(5)
+            .collect();
+        if candidates.is_empty() {
+            self.autocomplete = None;
+            return;
+        }
+        let row = self.editor.cursor_row;
+        let selected = match &self.autocomplete {
+            Some(prev) if prev.row == row && prev.start_col == start_col => prev.selected.min(candidates.len() - 1),
+            _ => 0,
+        };
+        self.autocomplete = Some(AutocompleteState { row, start_col, candidates, selected });
+    }
+
+    /// RFC-033 regra 2: retângulo da linha `index` dentro do painel de
+    /// autocomplete cuja origem é `origin` -- geometria pura, sem depender
+    /// de fonte, para que `draw_autocomplete_panel` (que sabe a origem real,
+    /// calculada com `font_code`) e o cache de clique em `update` concordem
+    /// sobre onde cada sugestão está.
+    fn autocomplete_row_rect(origin: Vec2, index: usize, width: f32) -> Rect {
+        const ROW_H: f32 = 22.0;
+        Rect::new(origin.x, origin.y + index as f32 * ROW_H, width, ROW_H)
     }
 
     /// RFC-026 regra 2: retângulo do cartão `index` na lista de scripts
@@ -555,6 +751,10 @@ impl DuelScene {
             }
             if self.btn_clear.clicked(mouse) {
                 self.editor.clear();
+                // RFC-033: LIMPAR muda o texto por baixo de qualquer lista
+                // de sugestões aberta -- a âncora dela (linha/coluna) não
+                // existe mais depois de um editor vazio.
+                self.autocomplete = None;
             }
             if self.btn_save_script.clicked(mouse) {
                 self.save_current_script(save);
@@ -580,6 +780,9 @@ impl DuelScene {
                 for (i, script) in save.scripts.iter().enumerate() {
                     if Self::load_card_rect(i).contains(mouse) {
                         self.editor.load_text(&script.body);
+                        // RFC-033: mesmo raciocínio do LIMPAR acima -- texto
+                        // trocado por baixo de uma âncora que já não existe.
+                        self.autocomplete = None;
                         self.log.push((format!("Script carregado do grimorio: {}", script.name), theme::MUSGO));
                         self.show_load_menu = false;
                         break;
@@ -642,6 +845,11 @@ impl DuelScene {
                 if card.hovered && is_mouse_button_pressed(MouseButton::Left) {
                     self.editor.insert_snippet(cmd.snippet);
                     card.flash = Some(0.0);
+                    // RFC-033: um clique na paleta insere texto (possivelmente
+                    // com quebra de linha) na posição do cursor -- a mesma
+                    // razão do LIMPAR/CARREGAR acima, a âncora de qualquer
+                    // lista de sugestões aberta não sobrevive a isso.
+                    self.autocomplete = None;
                 }
             }
         } else {
@@ -652,7 +860,63 @@ impl DuelScene {
 
         match &mut self.phase {
             Phase::Writing => {
-                self.editor.update();
+                // RFC-033 regra 2: enquanto a lista de sugestões está
+                // aberta, Esc/setas/Tab/Enter pertencem a ela primeiro --
+                // nenhuma dessas teclas deve também ser interpretada por
+                // `CodeEditor::update()` no mesmo frame (Tab, por exemplo,
+                // indentaria 4 espaços por baixo da conclusão do
+                // identificador se os dois rodassem). `consumed` marca que o
+                // frame já foi tratado e `self.editor.update()` não deve
+                // rodar; nesses casos a lista também não é recalculada
+                // depois (deixa o fechamento/seleção/conclusão valendo,
+                // em vez de reabrir/resetar no mesmo frame).
+                let mut consumed = false;
+                if let Some(ac) = &mut self.autocomplete {
+                    if is_key_pressed(KeyCode::Escape) {
+                        self.autocomplete = None;
+                        consumed = true;
+                    } else if is_key_pressed(KeyCode::Up) {
+                        ac.selected = if ac.selected == 0 { ac.candidates.len() - 1 } else { ac.selected - 1 };
+                        consumed = true;
+                    } else if is_key_pressed(KeyCode::Down) {
+                        ac.selected = (ac.selected + 1) % ac.candidates.len();
+                        consumed = true;
+                    } else if is_key_pressed(KeyCode::Tab) || is_key_pressed(KeyCode::Enter) {
+                        let name = ac.candidates[ac.selected].name.clone();
+                        let start_col = ac.start_col;
+                        self.editor.replace_identifier_prefix(start_col, &name);
+                        self.autocomplete = None;
+                        consumed = true;
+                    } else if is_mouse_button_pressed(MouseButton::Left) {
+                        // Ajuste do product-manager sobre a ambiguidade
+                        // sinalizada na entrega: clicar numa sugestão
+                        // confirma na hora, mesmo padrão universal de
+                        // autocomplete (editor de código, busca de
+                        // navegador, etc.) -- exigir um Tab/Enter extra
+                        // depois do clique seria surpreendente pra quem já
+                        // usou qualquer autocomplete. As setas continuam só
+                        // destacando (não confirmam sozinhas), porque
+                        // navegação por teclado sem confirmação explícita
+                        // é o padrão esperado nesse caso. Usa o retângulo
+                        // cacheado do último `draw` (ver `autocomplete_rects`,
+                        // campo documentado em `DuelScene`).
+                        for (i, r) in self.autocomplete_rects.borrow().iter().enumerate() {
+                            if r.contains(mouse) && i < ac.candidates.len() {
+                                let name = ac.candidates[i].name.clone();
+                                let start_col = ac.start_col;
+                                self.editor.replace_identifier_prefix(start_col, &name);
+                                self.autocomplete = None;
+                                consumed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if !consumed {
+                    self.editor.update();
+                    self.recompute_autocomplete();
+                }
                 // RFC-018 regra 1: recalculado a cada frame a partir do
                 // texto atual — nunca uma heurística, nunca um valor
                 // desatualizado da última edição.
@@ -756,6 +1020,11 @@ impl DuelScene {
     }
 
     fn run_script(&mut self, player: &mut Entity, monster: &mut MonsterState, save: &SaveData) {
+        // RFC-033: EXECUTAR sai de `Phase::Writing` (e o texto do editor
+        // pode ser apagado mais adiante, quando o replay termina) -- uma
+        // lista de sugestões apontando para uma linha/coluna que já não
+        // existe mais não deve sobreviver a essa transição.
+        self.autocomplete = None;
         self.turn += 1;
         let src = self.editor.text();
         let program = match parser::parse(&src) {
@@ -816,6 +1085,11 @@ impl DuelScene {
     /// EXECUTAR mostraria (regra 2) e não avança `self.turn` nem chama
     /// `rehearse` — ENSAIAR nunca custa um turno real (regra 5).
     fn run_rehearsal(&mut self, player: &Entity, monster: &MonsterState, save: &SaveData) {
+        // RFC-033: abre o overlay modal do Ensaio (`show_rehearsal`), que
+        // consome o resto de `update()` até fechar -- mesmo raciocínio de
+        // `run_script` acima, sem deixar a lista velha reaparecendo por
+        // baixo do overlay quando ele fechar.
+        self.autocomplete = None;
         let src = self.editor.text();
         let program = match parser::parse(&src) {
             Ok(p) => p,
@@ -881,6 +1155,7 @@ impl DuelScene {
         clear_background(theme::TUMBA);
         self.draw_top_bar(assets, monster, current_phase);
         self.draw_editor_column(assets);
+        self.draw_autocomplete_panel(assets);
         self.draw_arena(assets, player, monster, foe_kind);
         self.draw_dossier_and_log(assets, monster);
         if self.show_load_menu {
@@ -1093,6 +1368,97 @@ impl DuelScene {
         }
     }
 
+    /// RFC-033 regra 2: posição de tela (x, y da linha de base) do cursor de
+    /// texto -- mesma fórmula que o retângulo do cursor em `draw_code_lines`
+    /// usa (`font_code`, RFC-032 regra 3), duplicada aqui de propósito: as
+    /// duas precisam concordar pixel a pixel para a lista de sugestões
+    /// nascer exatamente onde o cursor está, mas vivem em métodos
+    /// diferentes porque só um dos dois (este) roda quando não há cursor
+    /// nenhum para desenhar (fora de `Phase::Writing`). `None` se a linha do
+    /// cursor está fora da área visível do editor (sem rolagem, mesma
+    /// limitação que já existe para o próprio cursor em `draw_code_lines`).
+    fn cursor_screen_pos(&self, assets: &Assets) -> Option<Vec2> {
+        let line_h = 22.0;
+        let y0 = EDITOR_BOX_Y + EDITOR_HEADER_H + 4.0;
+        let h = EDITOR_BOX_H - EDITOR_HEADER_H - 4.0 - 32.0;
+        let max_lines = (h / line_h).floor() as usize;
+        let row = self.editor.cursor_row;
+        if row >= max_lines {
+            return None;
+        }
+        let line = self.editor.lines.get(row)?;
+        let prefix: String = line.chars().take(self.editor.cursor_col).collect();
+        let dims = measure_text(&prefix, Some(&assets.font_code), 16, 1.0);
+        Some(vec2(34.0 + dims.width, y0 + row as f32 * line_h + 16.0))
+    }
+
+    /// RFC-033 regra 2: lista pequena (até 5) ancorada perto do cursor,
+    /// reaproveitando o mesmo trio de cores dos cartões da paleta de
+    /// comandos (`PEDRA`/`TIJOLO`/`OURO`) -- sem cor nova. A sugestão
+    /// destacada ganha a descrição do comando embaixo da lista quando ela
+    /// existe (regra 3), mesmo texto que `draw_command_palette` mostra no
+    /// hover. Também é o único lugar que escreve em `autocomplete_rects` --
+    /// `update()` (no frame seguinte) lê de lá pra saber se um clique
+    /// acertou uma linha (ver o campo, documentado em `DuelScene`).
+    fn draw_autocomplete_panel(&self, assets: &Assets) {
+        let show = matches!(self.phase, Phase::Writing) && self.autocomplete.is_some();
+        if !show {
+            self.autocomplete_rects.borrow_mut().clear();
+            return;
+        }
+        let ac = self.autocomplete.as_ref().unwrap();
+        let Some(anchor) = self.cursor_screen_pos(assets) else {
+            self.autocomplete_rects.borrow_mut().clear();
+            return;
+        };
+
+        const ROW_H: f32 = 22.0;
+        const PAD: f32 = 8.0;
+        const DESC_LINE_H: f32 = 16.0;
+        // regra 2: lista pequena o bastante que o nome mais longo (nunca
+        // maior que "for i in a..b:") cabe folgado num painel estreito --
+        // largura decidida só pelos nomes; a descrição (bem mais longa)
+        // quebra em linhas dentro dessa mesma largura em vez de alargar o
+        // painel até quase a coluna inteira do editor.
+        let name_width = ac.candidates.iter().map(|c| measure_text(&c.name, Some(&assets.font_body), 14, 1.0).width).fold(0.0_f32, f32::max);
+        let width = (name_width + PAD * 2.0).clamp(120.0, 220.0);
+        let desc = ac.candidates[ac.selected].description;
+        let desc_lines = desc.map(|t| wrap_text_px(t, &assets.font_body, 12, width - PAD * 2.0)).unwrap_or_default();
+        let desc_h = if desc_lines.is_empty() { 0.0 } else { 6.0 + desc_lines.len() as f32 * DESC_LINE_H };
+        let list_h = ac.candidates.len() as f32 * ROW_H;
+        let panel_h = list_h + desc_h;
+
+        // regra 2: ancorado perto do cursor, logo abaixo da linha atual --
+        // clampeado pra nunca vazar a coluna do editor pela direita.
+        let origin_x = (anchor.x).min(EDITOR_W - 20.0 - width);
+        let origin_y = anchor.y + 6.0;
+        let origin = vec2(origin_x, origin_y);
+
+        draw_rectangle(origin.x - 2.0, origin.y - 2.0, width + 4.0, panel_h + 4.0, theme::PEDRA);
+        draw_rectangle_lines(origin.x - 2.0, origin.y - 2.0, width + 4.0, panel_h + 4.0, 2.0, theme::OURO);
+
+        let mut rects = Vec::with_capacity(ac.candidates.len());
+        for (i, cand) in ac.candidates.iter().enumerate() {
+            let r = Self::autocomplete_row_rect(origin, i, width);
+            if i == ac.selected {
+                draw_rectangle(r.x, r.y, r.w, r.h, theme::AREIA_ESCURA);
+            }
+            draw_text_ex(
+                &cand.name,
+                r.x + PAD,
+                r.y + 16.0,
+                TextParams { font: Some(&assets.font_body), font_size: 14, color: if i == ac.selected { theme::OURO } else { theme::ESCARAVELHO }, ..Default::default() },
+            );
+            rects.push(r);
+        }
+        for (i, line) in desc_lines.iter().enumerate() {
+            let y = origin.y + list_h + 12.0 + i as f32 * DESC_LINE_H;
+            draw_text_ex(line, origin.x + PAD, y, TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::POEIRA, ..Default::default() });
+        }
+
+        *self.autocomplete_rects.borrow_mut() = rects;
+    }
+
     fn draw_command_palette(&self, assets: &Assets, panel_y: f32) {
         draw_text_ex(
             "COMANDOS - CLIQUE PARA INSERIR",
@@ -1122,6 +1488,23 @@ impl DuelScene {
                 r.y + 21.0,
                 TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::POEIRA, ..Default::default() },
             );
+        }
+
+        // RFC-033 regra 3: tooltip simples no hover de um cartão -- desenhado
+        // depois de todos os cartões (por cima, nunca atrás de outro
+        // cartão). No máximo um cartão está `hovered` por vez (o mouse só
+        // pode estar sobre um retângulo), então não há ambiguidade sobre
+        // qual descrição mostrar.
+        if let Some((i, cmd)) = COMMANDS.iter().enumerate().find(|(i, _)| self.command_cards[*i].hovered) {
+            let r = Self::command_rect(i);
+            let lines = wrap_text_px(cmd.description, &assets.font_body, 12, r.w - 16.0);
+            let tip_h = 8.0 + lines.len() as f32 * 16.0;
+            let tip_y = r.y - tip_h - 4.0;
+            draw_rectangle(r.x, tip_y, r.w, tip_h, theme::PEDRA);
+            draw_rectangle_lines(r.x, tip_y, r.w, tip_h, 2.0, theme::OURO);
+            for (li, line) in lines.iter().enumerate() {
+                draw_text_ex(line, r.x + 8.0, tip_y + 16.0 + li as f32 * 16.0, TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::PAPIRO, ..Default::default() });
+            }
         }
     }
 
@@ -1568,6 +1951,31 @@ const COLLECTIONS: &[&str] = &["espada", "magia", "escudo", "pocao", "eu", "inim
 /// `script::lexer` de propósito — aquele exige o texto lexar com
 /// sucesso, e perderia formatação exata (espaçamento, aspas) ao
 /// reconstituir do token.
+/// RFC-033: quebra `text` em linhas que cabem em `max_width` (medidas com
+/// `font`/`size`), palavra por palavra -- usado pela descrição do
+/// autocomplete e pelo tooltip da paleta de comandos, os dois textos livres
+/// desta cena que não cabem numa linha só num painel estreito. Uma única
+/// palavra maior que `max_width` sozinha (não deveria acontecer com as
+/// descrições curtas de `COMMANDS`, mas não é impossível) vira sua própria
+/// linha sem cortar caracteres -- prefere vazar um pouco a truncar texto.
+fn wrap_text_px(text: &str, font: &Font, size: u16, max_width: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
+        if !current.is_empty() && measure_text(&candidate, Some(font), size, 1.0).width > max_width {
+            lines.push(std::mem::take(&mut current));
+            current = word.to_string();
+        } else {
+            current = candidate;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 fn highlight_line(line: &str) -> Vec<(String, Color)> {
     let mut out = Vec::new();
     let chars: Vec<char> = line.chars().collect();

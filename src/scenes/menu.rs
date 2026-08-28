@@ -13,6 +13,81 @@ use crate::ui::theme;
 
 const LEFT_W: f32 = 620.0;
 
+/// Texto de descrição do jogo, coluna esquerda do menu -- extraído para
+/// constante porque tanto `draw()` (desenha) quanto `MenuScene::new()`
+/// (calcula onde o bloco de status termina, ver `status_block_bottom`)
+/// precisam da mesma string pra concordar em quantas linhas ela ocupa.
+const DESC_TEXT: &str =
+    "Escreva o roteiro do seu turno. A piramide executa linha por linha - e nao perdoa parenteses abertos.";
+
+// MÉDIO-1 (QA-023-030): item_rect() dos itens da lista de navegação usava
+// uma constante fixa (`380.0 + index*58.0`) que não sabia quanto texto de
+// status (linha "PROGRESSO" + até 2 linhas de `last_drop`, RFC-026/028/029)
+// vinha desenhado acima dela -- resultado, a lista podia sobrepor o texto
+// (ou o texto ficar cortado atrás do item). A correção calcula, uma única
+// vez em `MenuScene::new()` (o bloco de status é fixo depois disso: só
+// depende de `next_room`/`last_drop`, que não mudam durante a vida da
+// cena), onde o bloco de status termina de verdade, e deriva o espaçamento
+// da lista a partir do espaço vertical que sobrou -- encolhendo apenas o
+// necessário pra caber os até 6 itens (build debug) em `HEIGHT` (720px),
+// nunca abaixo de `ITEM_SPACING_DEFAULT`/`ITEM_H_DEFAULT` quando o espaço
+// já é suficiente (o caso comum: build release, sem despojo recente).
+const ITEM_SPACING_DEFAULT: f32 = 58.0;
+const ITEM_H_DEFAULT: f32 = 48.0;
+const ITEM_SPACING_MIN: f32 = 38.0;
+const ITEM_H_MIN: f32 = 34.0;
+/// Espaço vertical reservado entre o fim do bloco de status e o primeiro
+/// item da lista -- evita que o texto encoste no retângulo do item mesmo
+/// no caso mais compacto.
+const LIST_MARGIN_TOP: f32 = 16.0;
+/// Limite inferior da lista -- abaixo disso é a área da rodape
+/// ("v0.5.0 - BUILD RUST", desenhada em `HEIGHT - 24.0`); esta margem
+/// garante alguns pixels livres acima dela.
+const LIST_BOTTOM_LIMIT: f32 = HEIGHT - 28.0;
+
+/// Posição vertical (em pixels, mesmo espaço de `draw()`) onde o bloco de
+/// status (linha "PROGRESSO..." + `last_drop`, se houver) termina de
+/// desenhar. Espelha exatamente a aritmética que `draw()` usa para
+/// posicionar esses textos (linha 310 + `wrap_text(DESC_TEXT, 46)` +
+/// gap de 8px + 24px por linha de `last_drop`) -- ver comentário de
+/// `MenuScene::new` sobre por que isso é calculado uma única vez.
+fn status_block_bottom(next_room: Option<&'static str>, last_drop: &Option<String>) -> f32 {
+    let _ = next_room; // a linha "PROGRESSO"/"PIRAMIDE CONCLUIDA" ocupa 1 linha em ambos os casos
+    let mut y = 310.0;
+    for _line in wrap_text(DESC_TEXT, 46) {
+        y += 24.0;
+    }
+    y += 8.0;
+    if let Some(drop) = last_drop {
+        for _line in drop.split('\n') {
+            y += 24.0;
+        }
+    }
+    y
+}
+
+/// Deriva `(list_start_y, item_spacing, item_h)` a partir de onde o bloco
+/// de status termina (`status_bottom`) e de quantos itens a lista de
+/// navegação tem (5 em release, 6 em debug -- `MAPA (DEBUG)`). Quando o
+/// espaço disponível até `LIST_BOTTOM_LIMIT` já comporta os itens no
+/// tamanho padrão, devolve o padrão inalterado (release + sem despojo:
+/// visual idêntico ao de antes desta correção). Só encolhe
+/// (mantendo a proporção altura/espaçamento do padrão) o suficiente para
+/// caber no espaço restante, com um piso mínimo de legibilidade/clique.
+fn compute_list_layout(status_bottom: f32, n_items: usize) -> (f32, f32, f32) {
+    let list_start = status_bottom + LIST_MARGIN_TOP;
+    let available = (LIST_BOTTOM_LIMIT - list_start).max(0.0);
+    let gaps = n_items.saturating_sub(1) as f32;
+    let needed_default = gaps * ITEM_SPACING_DEFAULT + ITEM_H_DEFAULT;
+    if n_items <= 1 || available >= needed_default {
+        return (list_start, ITEM_SPACING_DEFAULT, ITEM_H_DEFAULT);
+    }
+    let ratio = ITEM_H_DEFAULT / ITEM_SPACING_DEFAULT;
+    let spacing = (available / (gaps + ratio)).max(ITEM_SPACING_MIN);
+    let item_h = (spacing * ratio).max(ITEM_H_MIN);
+    (list_start, spacing, item_h)
+}
+
 // RFC-023 regras 1-3: animacao de entrada do menu. Deterministica por tempo
 // (mesmo padrao de `get_time()` do idle bob/blink de carga em `duel.rs`),
 // nunca bloqueia input (regra 2 -- ver `MenuScene::entry_elapsed`), e roda
@@ -115,12 +190,23 @@ pub struct MenuScene {
     /// pausa). Não é persistido em `SaveData`: é só o texto de uma única
     /// tela, no mesmo espírito efêmero do `log` de `DuelScene`.
     last_drop: Option<String>,
+    /// MÉDIO-1 (QA-023-030): posição/espaçamento/altura da lista de itens,
+    /// calculados uma única vez aqui a partir de onde o bloco de status
+    /// (que depende só de `next_room`/`last_drop`, ambos fixos pra vida da
+    /// cena) termina de desenhar -- ver `compute_list_layout`. `update()`
+    /// e `draw()` leem estes três campos por `item_rect()`, nunca
+    /// recalculam, então clique e desenho sempre concordam.
+    list_start_y: f32,
+    item_spacing: f32,
+    item_h: f32,
 }
 
 impl MenuScene {
     pub fn new(_assets: &Assets, last_drop: Option<String>) -> Self {
         let save = SaveData::load();
         let next_room = PHASES.get(save.current_phase).map(|(_, spec_fn)| spec_fn().room);
+        let status_bottom = status_block_bottom(next_room, &last_drop);
+        let (list_start_y, item_spacing, item_h) = compute_list_layout(status_bottom, Self::items().len());
         MenuScene {
             hovered: None,
             current_phase: save.current_phase,
@@ -128,6 +214,9 @@ impl MenuScene {
             opened_at: get_time(),
             entry_skipped: false,
             last_drop,
+            list_start_y,
+            item_spacing,
+            item_h,
         }
     }
 
@@ -160,9 +249,9 @@ impl MenuScene {
         items
     }
 
-    fn item_rect(index: usize) -> Rect {
-        let y = 380.0 + index as f32 * 58.0;
-        Rect::new(60.0, y, LEFT_W - 120.0, 48.0)
+    fn item_rect(&self, index: usize) -> Rect {
+        let y = self.list_start_y + index as f32 * self.item_spacing;
+        Rect::new(60.0, y, LEFT_W - 120.0, self.item_h)
     }
 
     pub fn update(&mut self) -> Option<Transition> {
@@ -185,7 +274,7 @@ impl MenuScene {
         let items = Self::items();
         self.hovered = None;
         for (i, _item) in items.iter().enumerate() {
-            if Self::item_rect(i).contains(mouse) {
+            if self.item_rect(i).contains(mouse) {
                 self.hovered = Some(i);
             }
         }
@@ -254,9 +343,8 @@ impl MenuScene {
 
         draw_rectangle(60.0, 275.0 + logo_offset_y, 140.0, 5.0, Color::new(theme::OURO.r, theme::OURO.g, theme::OURO.b, logo_progress));
 
-        let desc = "Escreva o roteiro do seu turno. A piramide executa linha por linha - e nao perdoa parenteses abertos.";
         let mut y = 310.0;
-        for line in wrap_text(desc, 46) {
+        for line in wrap_text(DESC_TEXT, 46) {
             draw_text_ex(&line, 60.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::POEIRA, ..Default::default() });
             y += 24.0;
         }
@@ -314,9 +402,15 @@ impl MenuScene {
             // nunca a area clicavel (é assim que a regra 2 fica garantida
             // mesmo sem o `entry_skipped`: o clique sempre acerta o item
             // certo, animado ou nao).
-            let r = Self::item_rect(i);
+            let r = self.item_rect(i);
             let item_progress = entry_ease(t, ENTRY_ITEM_START + i as f32 * ENTRY_ITEM_STAGGER, ENTRY_ITEM_DUR);
             let draw_x = r.x + (1.0 - item_progress) * 40.0;
+            // MÉDIO-1: baseline do texto proporcional a `r.h` (antes fixo em
+            // `r.y + 31.0`, calibrado só pro item_h padrão de 48px) -- mantém
+            // o texto centralizado verticalmente mesmo quando
+            // `compute_list_layout` encolhe o item pra caber os 6 itens do
+            // menu debug com o bloco de status maior.
+            let baseline_y = r.y + r.h - 17.0;
 
             let hovered = self.hovered == Some(i);
             if hovered {
@@ -328,14 +422,14 @@ impl MenuScene {
             draw_text_ex(
                 item.key,
                 draw_x + 16.0,
-                r.y + 31.0,
+                baseline_y,
                 TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: fade(theme::AREIA_ESCURA, item_progress), ..Default::default() },
             );
             let color = if hovered { theme::OURO } else { theme::PAPIRO };
             draw_text_ex(
                 item.label,
                 draw_x + 60.0,
-                r.y + 31.0,
+                baseline_y,
                 TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: fade(color, item_progress), ..Default::default() },
             );
         }

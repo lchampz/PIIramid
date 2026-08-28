@@ -126,13 +126,22 @@ impl GameOverScene {
         // RFC-029: `last_drop` pode ter uma segunda linha (separada por
         // `\n`) com a nota da Grade de Eficiência do último monstro —
         // mesma linha extra que `MenuScene` desenha nas vitórias parciais.
+        // MÉDIO-2 (QA-023-030): `dy` (onde o bloco de sabor+despojo termina
+        // de desenhar) alimenta `sy` abaixo -- antes, `sy` era uma constante
+        // fixa (`card_y + 220.0`) que não sabia quanto texto veio acima, e
+        // com sabor de 2 linhas + despojo+nota de 2 linhas a grade de
+        // estatísticas quase encostava no texto. `.max(card_y + 220.0)`
+        // preserva o visual exato de antes desta correção no caso comum
+        // (derrota, ou vitória sem despojo/nota).
+        let mut dy = y;
         if let Some(drop) = &self.last_drop {
-            let mut dy = y + 6.0;
+            dy += 6.0;
             for line in drop.split('\n') {
                 draw_text_ex(line, card_x + 44.0, dy, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() });
                 dy += 22.0;
             }
         }
+        let stats_y = (dy + 14.0).max(card_y + 220.0).min(card_y + 340.0);
 
         let stats: [(&str, String); 3] = [
             ("TURNOS", format!("{:02}", self.turns)),
@@ -142,7 +151,7 @@ impl GameOverScene {
         let stat_w = (card_w - 88.0 - 32.0) / 3.0;
         for (i, (label, value)) in stats.iter().enumerate() {
             let sx = card_x + 44.0 + i as f32 * (stat_w + 16.0);
-            let sy = card_y + 220.0;
+            let sy = stats_y;
             draw_rectangle(sx, sy, stat_w, 80.0, theme::TUMBA);
             draw_rectangle_lines(sx, sy, stat_w, 80.0, 2.0, theme::TIJOLO);
             draw_text_ex(label, sx + 12.0, sy + 24.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::AREIA_ESCURA, ..Default::default() });

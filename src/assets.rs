@@ -6,6 +6,13 @@
 //! Start 2P para títulos/números grandes, Silkscreen para o resto — veio
 //! do layout em `PIIramid Layout.dc.html` e está em `assets/fonts/`
 //! (Google Fonts, licença OFL, ver `assets/fonts/OFL-*.txt`).
+//!
+//! RFC-032: o texto *dentro* do editor de código (linhas do script do
+//! jogador, `duel.rs::draw_code_lines`) ganhou fonte própria, `font_code`
+//! (Space Mono, Google Fonts, OFL — `assets/fonts/OFL-SpaceMono.txt`).
+//! Silkscreen deixava maiúscula/minúscula parecidas demais pra ler código
+//! e o usuário pediu explicitamente uma fonte só pro editor — o resto da
+//! UI (`font_title`/`font_body`) não muda.
 
 use macroquad::prelude::*;
 
@@ -57,6 +64,12 @@ pub struct Assets {
     pub font_body: Font,
     /// Silkscreen bold — ênfase dentro de blocos de corpo
     pub font_body_bold: Font,
+    /// Space Mono — RFC-032: só o texto desenhado dentro do editor de
+    /// código (`duel.rs::draw_code_lines`). Monoespaçada (alinhamento de
+    /// coluna importa em código), maiúscula/minúscula bem distintas
+    /// (Silkscreen confundia as duas) e cobertura confirmada de acentos
+    /// latinos (á ã é ê í ó ô ú ç ü, ver nota de entrega da RFC-032).
+    pub font_code: Font,
 }
 
 async fn load_pixel_texture(path: &str) -> Texture2D {
@@ -113,6 +126,7 @@ impl Assets {
             font_title: load_font("./assets/fonts/PressStart2P-Regular.ttf").await,
             font_body: load_font("./assets/fonts/Silkscreen-Regular.ttf").await,
             font_body_bold: load_font("./assets/fonts/Silkscreen-Bold.ttf").await,
+            font_code: load_font("./assets/fonts/SpaceMono-Regular.ttf").await,
         }
     }
 

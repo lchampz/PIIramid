@@ -32,6 +32,20 @@ const ARENA_W: f32 = WIDTH - EDITOR_W - SIDE_W;
 
 const EDITOR_BOX_Y: f32 = TOP_BAR_H + 10.0;
 const EDITOR_BOX_H: f32 = 300.0;
+// RFC-032 regra 1: a barra superior do editor virou 2 linhas em vez de 1.
+// Antes, "turno.pii" + "{N} LINHAS" + LIMPAR/SALVAR/CARREGAR disputavam os
+// mesmos 32px de altura -- com N de 3 dígitos "{N} LINHAS" cresce o
+// suficiente pra encostar em CARREGAR (achado do usuário, ver RFC). Uma
+// segunda linha elimina a disputa horizontal por construção: linha 1
+// (nome do arquivo + contagem de linhas) e linha 2 (botões) nunca
+// compartilham eixo X com o outro grupo, então não há par de elementos
+// dos dois grupos que possa colidir, qualquer que seja a largura do texto.
+const EDITOR_HEADER_H: f32 = 64.0;
+/// Deslocamento em Y (a partir de `EDITOR_BOX_Y`) onde a 2a linha da barra
+/// (os 3 botões) começa -- mesma proporção 5px topo / 1px fundo que a
+/// barra de 1 linha original usava dentro do seu slot de 32px, agora
+/// aplicada ao slot de 32px da 2a linha (`EDITOR_HEADER_H - 32.0`).
+const EDITOR_HEADER_BUTTONS_Y: f32 = EDITOR_BOX_Y + 32.0 + 5.0;
 const COMMAND_PANEL_Y: f32 = EDITOR_BOX_Y + EDITOR_BOX_H + 12.0;
 const COMMAND_ROW_H: f32 = 32.0;
 const COMMAND_ROW_GAP: f32 = 6.0;
@@ -379,12 +393,17 @@ impl DuelScene {
             btn_execute: Button::new("EXECUTAR", vec2(10.0, BUTTONS_Y), vec2(EDITOR_W - 20.0 - 90.0 - 96.0 - 16.0, 56.0), ButtonStyle::Primary, theme::TITLE_SM),
             btn_rehearse: Button::new("ENSAIAR", vec2(10.0 + (EDITOR_W - 20.0 - 90.0 - 96.0 - 16.0) + 8.0, BUTTONS_Y), vec2(96.0, 56.0), ButtonStyle::Secondary, theme::TITLE_SM),
             btn_leave: Button::new("FUGIR", vec2(10.0 + EDITOR_W - 20.0 - 90.0, BUTTONS_Y), vec2(90.0, 56.0), ButtonStyle::Secondary, theme::TITLE_SM),
-            btn_clear: Button::new("LIMPAR", vec2(EDITOR_W - 90.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
-            btn_save_script: Button::new("SALVAR", vec2(EDITOR_W - 90.0 - 86.0, EDITOR_BOX_Y + 5.0), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
+            // RFC-032 regra 1: os 3 botões mudaram de EDITOR_BOX_Y + 5.0 (1a
+            // linha, disputando X com "{N} LINHAS") para
+            // EDITOR_HEADER_BUTTONS_Y (2a linha da barra) — X de cada botão
+            // é o mesmo de antes (só o Y mudou), o gap de 8px entre os três
+            // já estava correto e continua valendo.
+            btn_clear: Button::new("LIMPAR", vec2(EDITOR_W - 90.0, EDITOR_HEADER_BUTTONS_Y), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
+            btn_save_script: Button::new("SALVAR", vec2(EDITOR_W - 90.0 - 86.0, EDITOR_HEADER_BUTTONS_Y), vec2(78.0, 26.0), ButtonStyle::Ghost, 12),
             // "CARREGAR" tem 2 letras a mais que "SALVAR"/"LIMPAR" — caixa
             // um pouco mais larga (84 em vez de 78) pro rótulo não estourar
             // a borda a 12px, mesmo gap de 8px que já separa os outros dois.
-            btn_load_script: Button::new("CARREGAR", vec2(EDITOR_W - 90.0 - 86.0 - 92.0, EDITOR_BOX_Y + 5.0), vec2(84.0, 26.0), ButtonStyle::Ghost, 12),
+            btn_load_script: Button::new("CARREGAR", vec2(EDITOR_W - 90.0 - 86.0 - 92.0, EDITOR_HEADER_BUTTONS_Y), vec2(84.0, 26.0), ButtonStyle::Ghost, 12),
             show_load_menu: false,
             command_cards: vec![CommandCardState::default(); COMMANDS.len()],
             player_vars: HashMap::new(),
@@ -959,11 +978,28 @@ impl DuelScene {
         draw_rectangle(0.0, box_y, EDITOR_W - 20.0, box_h, theme::TUMBA);
         draw_rectangle_lines(0.0, box_y, EDITOR_W - 20.0, box_h, 3.0, theme::OURO);
 
-        draw_rectangle(0.0, box_y, EDITOR_W - 20.0, 32.0, theme::PEDRA);
+        // RFC-032 regra 1: a barra virou 2 linhas (`EDITOR_HEADER_H`, era
+        // 32px fixos) -- linha 1 (nome do arquivo + contagem) e linha 2
+        // (botões, ver EDITOR_HEADER_BUTTONS_Y na construção dos botões)
+        // nunca competem pelo mesmo eixo X, então não colidem por
+        // construção, qualquer que seja a largura de "{N} LINHAS".
+        draw_rectangle(0.0, box_y, EDITOR_W - 20.0, EDITOR_HEADER_H, theme::PEDRA);
         draw_text_ex("turno.pii", 10.0, box_y + 21.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::PAPIRO, ..Default::default() });
+        // Prova numérica (Silkscreen-Regular, medida real via hmtx do
+        // .ttf): "turno.pii" a BODY_MD=16 tem 90.0px de largura, termina em
+        // x=100.0. `lines_label` right-aligned a 10px da borda direita do
+        // header (EDITOR_W - 20.0) cobre até "999 LINHAS" (pior caso de 3
+        // dígitos) a BODY_SM=14 = 94.5px, começando em x=440-10-94.5=335.5
+        // — 235.5px de sobra até x=100.0, bem acima do gap mínimo de 8px
+        // exigido pela regra 1. Por ser calculado com a largura real
+        // (`measure_text`) em vez de uma posição fixa, o resultado vale
+        // pra qualquer contagem de linhas, não só o pior caso medido aqui.
+        let lines_label = format!("{} LINHAS", self.editor.lines.len());
+        let lines_dims = measure_text(&lines_label, Some(&assets.font_body), theme::BODY_SM, 1.0);
+        let lines_x = (EDITOR_W - 20.0) - 10.0 - lines_dims.width;
         draw_text_ex(
-            format!("{} LINHAS", self.editor.lines.len()),
-            140.0,
+            &lines_label,
+            lines_x,
             box_y + 20.0,
             TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::POEIRA, ..Default::default() },
         );
@@ -971,7 +1007,7 @@ impl DuelScene {
         self.btn_save_script.draw(&assets.font_body);
         self.btn_load_script.draw(&assets.font_body);
 
-        self.draw_code_lines(assets, box_y + 36.0, box_h - 68.0);
+        self.draw_code_lines(assets, box_y + EDITOR_HEADER_H + 4.0, box_h - EDITOR_HEADER_H - 4.0 - 32.0);
 
         let (err_bg, err_border, err_color, err_text) = self.error_bar_style();
         let bar_y = box_y + box_h - 32.0;
@@ -1038,15 +1074,20 @@ impl DuelScene {
                 y,
                 TextParams { font: Some(&assets.font_body), font_size: 13, color: theme::POEIRA, ..Default::default() },
             );
+            // RFC-032 regra 3: só o texto do script (tokens desta linha e a
+            // medição do cursor, que precisa da mesma fonte pra não
+            // desalinhar do texto desenhado) usa `font_code` — o número da
+            // linha acima continua em `font_body`, é rótulo de UI, não
+            // código do jogador.
             let mut x = 34.0;
             for (token, color) in highlight_line(line) {
-                let dims = measure_text(&token, Some(&assets.font_body), 16, 1.0);
-                draw_text_ex(&token, x, y, TextParams { font: Some(&assets.font_body), font_size: 16, color, ..Default::default() });
+                let dims = measure_text(&token, Some(&assets.font_code), 16, 1.0);
+                draw_text_ex(&token, x, y, TextParams { font: Some(&assets.font_code), font_size: 16, color, ..Default::default() });
                 x += dims.width;
             }
             if i == self.editor.cursor_row && matches!(self.phase, Phase::Writing) && (get_time() * 2.0) as i64 % 2 == 0 {
                 let prefix: String = line.chars().take(self.editor.cursor_col).collect();
-                let dims = measure_text(&prefix, Some(&assets.font_body), 16, 1.0);
+                let dims = measure_text(&prefix, Some(&assets.font_code), 16, 1.0);
                 draw_rectangle(34.0 + dims.width, y - 14.0, 2.0, 18.0, theme::PAPIRO);
             }
         }
@@ -1471,8 +1512,24 @@ impl DuelScene {
 
         let visible_h = h - 40.0;
         let max_lines = (visible_h / 20.0).floor() as usize;
-        let visible = self.log.iter().rev().take(max_lines).rev();
-        for (i, (line, color)) in visible.enumerate() {
+        // RFC-032 regra 2: `line` podia ser mais largo que o painel
+        // (`SIDE_W`) e cortava sem quebra visível — mesmo `wrap_text` que
+        // `draw_dossier_and_log` já usa pra descrição do monstro (26
+        // caracteres cabe em `SIDE_W - 20.0` a este mesmo font_size 14,
+        // é o valor já validado nesse outro uso da coluna). Cada entrada
+        // de `self.log` pode virar mais de uma linha desenhada agora, por
+        // isso a lista final é achatada (flatten) em ordem cronológica
+        // antes de recortar as últimas `max_lines` que cabem no painel —
+        // recortar por entrada (como antes) permitiria uma entrada wrapped
+        // ultrapassar o fundo do painel.
+        let mut flattened: Vec<(String, Color)> = Vec::new();
+        for (line, color) in self.log.iter() {
+            for wrapped in wrap_text(line, 26) {
+                flattened.push((wrapped, *color));
+            }
+        }
+        let start = flattened.len().saturating_sub(max_lines);
+        for (i, (line, color)) in flattened[start..].iter().enumerate() {
             draw_text_ex(line, x + 10.0, y + 48.0 + i as f32 * 20.0, TextParams { font: Some(&assets.font_body), font_size: 14, color: *color, ..Default::default() });
         }
     }

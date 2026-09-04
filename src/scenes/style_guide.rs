@@ -7,6 +7,7 @@ use macroquad::prelude::*;
 use crate::assets::Assets;
 use crate::config::WIDTH;
 use crate::scenes::Transition;
+use crate::screen_scale::virtual_mouse_position;
 use crate::ui::button::{Button, ButtonStyle};
 use crate::ui::theme;
 
@@ -20,10 +21,10 @@ impl StyleGuideScene {
     }
 
     pub fn update(&mut self) -> Option<Transition> {
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         self.btn_back.update_hover(mouse);
         if self.btn_back.clicked(mouse) || is_key_pressed(KeyCode::Escape) {
-            return Some(Transition::GoToMenu);
+            return Some(Transition::GoToMenu { last_drop: None });
         }
         None
     }
@@ -56,7 +57,7 @@ impl StyleGuideScene {
             draw_rectangle(cx, y + 20.0, cell_w - 8.0, 60.0, *color);
             draw_rectangle_lines(cx, y + 20.0, cell_w - 8.0, 60.0, 2.0, theme::TIJOLO);
             draw_text_ex(name, cx, y + 96.0, TextParams { font: Some(&assets.font_body), font_size: 11, color: theme::PAPIRO, ..Default::default() });
-            draw_text_ex(hex, cx, y + 110.0, TextParams { font: Some(&assets.font_body), font_size: 10, color: theme::AREIA_ESCURA, ..Default::default() });
+            draw_text_ex(hex, cx, y + 110.0, TextParams { font: Some(&assets.font_body), font_size: 10, color: theme::POEIRA, ..Default::default() });
         }
     }
 
@@ -64,13 +65,13 @@ impl StyleGuideScene {
         draw_text_ex("TIPOGRAFIA", x, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::POEIRA, ..Default::default() });
         let w = 580.0;
         draw_rectangle(x, y + 16.0, w, 180.0, theme::PEDRA);
-        draw_rectangle_lines(x, y + 16.0, w, 180.0, 2.0, theme::AREIA_ESCURA);
+        draw_rectangle_lines(x, y + 16.0, w, 180.0, 2.0, theme::TIJOLO);
 
         draw_text_ex(
             "PRESS START 2P",
             x + 16.0,
             y + 40.0,
-            TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::AREIA_ESCURA, ..Default::default() },
+            TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::POEIRA, ..Default::default() },
         );
         draw_text_ex("MUMIA", x + 16.0, y + 76.0, TextParams { font: Some(&assets.font_title), font_size: 32, color: theme::PAPIRO, ..Default::default() });
         draw_text_ex("EXECUTAR", x + 16.0, y + 100.0, TextParams { font: Some(&assets.font_title), font_size: 14, color: theme::OURO, ..Default::default() });
@@ -79,7 +80,7 @@ impl StyleGuideScene {
             "SILKSCREEN",
             x + 16.0,
             y + 130.0,
-            TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::AREIA_ESCURA, ..Default::default() },
+            TextParams { font: Some(&assets.font_body), font_size: 12, color: theme::POEIRA, ..Default::default() },
         );
         draw_text_ex(
             "POSTURA: GUARDA",
@@ -98,7 +99,7 @@ impl StyleGuideScene {
     fn draw_frames(&self, assets: &Assets, x: f32, y: f32) {
         draw_text_ex("MOLDURAS", x, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::POEIRA, ..Default::default() });
         let frames: [(&str, Color, Color); 4] =
-            [("PRIMARIA", theme::PEDRA, theme::OURO), ("SECUNDARIA", theme::PEDRA, theme::AREIA_ESCURA), ("PERIGO", theme::DANGER_BG, theme::SANGUE), ("SCRIPT", theme::OK_BG, theme::ESCARAVELHO)];
+            [("PRIMARIA", theme::PEDRA, theme::OURO), ("SECUNDARIA", theme::PEDRA, theme::TIJOLO), ("PERIGO", theme::DANGER_BG, theme::SANGUE), ("SCRIPT", theme::OK_BG, theme::ESCARAVELHO)];
         let w = 280.0;
         let h = 60.0;
         for (i, (label, bg, border)) in frames.iter().enumerate() {
@@ -126,7 +127,7 @@ impl StyleGuideScene {
         draw_text_ex("BARRAS E REALCE", x, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::POEIRA, ..Default::default() });
         let w = 560.0;
         draw_rectangle(x, y + 16.0, w, 96.0, theme::PEDRA);
-        draw_rectangle_lines(x, y + 16.0, w, 96.0, 2.0, theme::AREIA_ESCURA);
+        draw_rectangle_lines(x, y + 16.0, w, 96.0, 2.0, theme::TIJOLO);
 
         draw_rectangle(x + 16.0, y + 32.0, w - 32.0, 18.0, theme::TUMBA);
         draw_rectangle(x + 16.0, y + 32.0, (w - 32.0) * 0.72, 18.0, theme::VIDA);
@@ -136,7 +137,7 @@ impl StyleGuideScene {
         draw_rectangle(x + 16.0, y + 80.0, (w - 32.0) * 0.6, 14.0, theme::ESCARAVELHO);
 
         let words: [(&str, Color); 6] =
-            [("SE / SENAO / REPETIR", theme::CHAMA), ("ESPADA MAGIA", theme::ESCARAVELHO), ("40", theme::MUSGO), ("Fogo", theme::MUSGO), ("( ) { }", theme::POEIRA), ("ERRO", theme::SANGUE)];
+            [("SE / SENAO / REPETIR", theme::ESCARAVELHO), ("ESPADA MAGIA", theme::ESCARAVELHO), ("40", theme::MUSGO), ("Fogo", theme::MUSGO), ("( ) { }", theme::POEIRA), ("ERRO", theme::SANGUE)];
         let mut wx = x;
         for (word, color) in words {
             draw_text_ex(word, wx, y + 128.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color, ..Default::default() });

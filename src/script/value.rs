@@ -33,6 +33,13 @@ impl ItemKind {
 pub struct Item {
     pub kind: ItemKind,
     pub name: String,
+    /// Bônus de dano consultável (RFC-015, regra 4). `0` em toda construção
+    /// via sintaxe normal do jogador (`espada.Fogo`, `espada["fogo"]`) —
+    /// nunca afeta `resolve_attack` (script/vm.rs), que continua somando
+    /// bônus só a partir do `Loadout` equipado. Só é populado com o valor
+    /// real da mochila quando o item vem de `selecionar()`, para que
+    /// `onde:` possa consultar `item.bonus`.
+    pub bonus_damage: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

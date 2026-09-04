@@ -6,9 +6,17 @@
 //! Start 2P para títulos/números grandes, Silkscreen para o resto — veio
 //! do layout em `PIIramid Layout.dc.html` e está em `assets/fonts/`
 //! (Google Fonts, licença OFL, ver `assets/fonts/OFL-*.txt`).
+//!
+//! RFC-032: o texto *dentro* do editor de código (linhas do script do
+//! jogador, `duel.rs::draw_code_lines`) ganhou fonte própria, `font_code`
+//! (Space Mono, Google Fonts, OFL — `assets/fonts/OFL-SpaceMono.txt`).
+//! Silkscreen deixava maiúscula/minúscula parecidas demais pra ler código
+//! e o usuário pediu explicitamente uma fonte só pro editor — o resto da
+//! UI (`font_title`/`font_body`) não muda.
 
 use macroquad::prelude::*;
 
+use crate::monsters::{Posture, Weakness};
 use crate::script::value::ItemKind;
 use crate::world::entity::Kind;
 
@@ -21,17 +29,31 @@ pub struct Assets {
     pub sprite_zombie: Texture2D,
     pub sprite_beetle: Texture2D,
     pub sprite_sphinx: Texture2D,
+    pub sprite_guardiao: Texture2D,
+    pub sprite_sentinela: Texture2D,
+    pub sprite_necroguardiao: Texture2D,
 
     pub portrait_player: Texture2D,
     pub portrait_mummy: Texture2D,
     pub portrait_zombie: Texture2D,
     pub portrait_beetle: Texture2D,
     pub portrait_sphinx: Texture2D,
+    pub portrait_guardiao: Texture2D,
+    pub portrait_sentinela: Texture2D,
+    pub portrait_necroguardiao: Texture2D,
 
     pub icon_espada: Texture2D,
     pub icon_magia: Texture2D,
     pub icon_escudo: Texture2D,
     pub icon_pocao: Texture2D,
+
+    // RFC-013: selos de postura e de fraqueza do dossiê (ver ASSETS-especificacoes.md).
+    pub icon_postura_guarda: Texture2D,
+    pub icon_postura_aberta: Texture2D,
+    pub icon_fraqueza_elemento: Texture2D,
+    pub icon_fraqueza_guarda: Texture2D,
+    pub icon_fraqueza_eficiencia: Texture2D,
+    pub icon_fraqueza_inspecao: Texture2D,
 
     pub tile_floor: Texture2D,
     pub tile_wall: Texture2D,
@@ -42,6 +64,12 @@ pub struct Assets {
     pub font_body: Font,
     /// Silkscreen bold — ênfase dentro de blocos de corpo
     pub font_body_bold: Font,
+    /// Space Mono — RFC-032: só o texto desenhado dentro do editor de
+    /// código (`duel.rs::draw_code_lines`). Monoespaçada (alinhamento de
+    /// coluna importa em código), maiúscula/minúscula bem distintas
+    /// (Silkscreen confundia as duas) e cobertura confirmada de acentos
+    /// latinos (á ã é ê í ó ô ú ç ü, ver nota de entrega da RFC-032).
+    pub font_code: Font,
 }
 
 async fn load_pixel_texture(path: &str) -> Texture2D {
@@ -67,17 +95,30 @@ impl Assets {
             sprite_zombie: load_pixel_texture("./assets/monsters/zombie.png").await,
             sprite_beetle: load_pixel_texture("./assets/monsters/beetle.png").await,
             sprite_sphinx: load_pixel_texture("./assets/monsters/sphinx.png").await,
+            sprite_guardiao: load_pixel_texture("./assets/monsters/guardiao.png").await,
+            sprite_sentinela: load_pixel_texture("./assets/monsters/sentinela.png").await,
+            sprite_necroguardiao: load_pixel_texture("./assets/monsters/necroguardiao.png").await,
 
             portrait_player: load_pixel_texture("./assets/portraits/player.png").await,
             portrait_mummy: load_pixel_texture("./assets/portraits/mummy.png").await,
             portrait_zombie: load_pixel_texture("./assets/portraits/zombie.png").await,
             portrait_beetle: load_pixel_texture("./assets/portraits/beetle.png").await,
             portrait_sphinx: load_pixel_texture("./assets/portraits/sphinx.png").await,
+            portrait_guardiao: load_pixel_texture("./assets/portraits/guardiao.png").await,
+            portrait_sentinela: load_pixel_texture("./assets/portraits/sentinela.png").await,
+            portrait_necroguardiao: load_pixel_texture("./assets/portraits/necroguardiao.png").await,
 
             icon_espada: load_pixel_texture("./assets/icons/espada.png").await,
             icon_magia: load_pixel_texture("./assets/icons/magia.png").await,
             icon_escudo: load_pixel_texture("./assets/icons/escudo.png").await,
             icon_pocao: load_pixel_texture("./assets/icons/pocao.png").await,
+
+            icon_postura_guarda: load_pixel_texture("./assets/icons/postura_guarda.png").await,
+            icon_postura_aberta: load_pixel_texture("./assets/icons/postura_aberta.png").await,
+            icon_fraqueza_elemento: load_pixel_texture("./assets/icons/fraqueza_elemento.png").await,
+            icon_fraqueza_guarda: load_pixel_texture("./assets/icons/fraqueza_guarda.png").await,
+            icon_fraqueza_eficiencia: load_pixel_texture("./assets/icons/fraqueza_eficiencia.png").await,
+            icon_fraqueza_inspecao: load_pixel_texture("./assets/icons/fraqueza_inspecao.png").await,
 
             tile_floor: load_pixel_texture("./assets/tileset/chao1.png").await,
             tile_wall: load_pixel_texture("./assets/tileset/muro1.png").await,
@@ -85,6 +126,7 @@ impl Assets {
             font_title: load_font("./assets/fonts/PressStart2P-Regular.ttf").await,
             font_body: load_font("./assets/fonts/Silkscreen-Regular.ttf").await,
             font_body_bold: load_font("./assets/fonts/Silkscreen-Bold.ttf").await,
+            font_code: load_font("./assets/fonts/SpaceMono-Regular.ttf").await,
         }
     }
 
@@ -95,6 +137,9 @@ impl Assets {
             Kind::Zombie => &self.sprite_zombie,
             Kind::Beetle => &self.sprite_beetle,
             Kind::Sphinx => &self.sprite_sphinx,
+            Kind::Guardiao => &self.sprite_guardiao,
+            Kind::Sentinela => &self.sprite_sentinela,
+            Kind::Necroguardiao => &self.sprite_necroguardiao,
         }
     }
 
@@ -107,6 +152,27 @@ impl Assets {
         }
     }
 
+    pub fn icon_for_posture(&self, posture: Posture) -> &Texture2D {
+        match posture {
+            Posture::Guarda => &self.icon_postura_guarda,
+            Posture::Aberta => &self.icon_postura_aberta,
+        }
+    }
+
+    /// `None` para `DuploSelo`/`ExigeNomeacao`/`ExigeInvocacaoDupla`: a spec
+    /// do designer não cobre ícone para essas fraquezas (RFC-013,
+    /// não-objetivo 1; RFC-017, não-objetivo 3) — o chamador desenha só o
+    /// texto da tag, como já era antes.
+    pub fn icon_for_weakness(&self, weakness: Weakness) -> Option<&Texture2D> {
+        match weakness {
+            Weakness::Elemento(_) => Some(&self.icon_fraqueza_elemento),
+            Weakness::ExigeGuarda => Some(&self.icon_fraqueza_guarda),
+            Weakness::Eficiencia { .. } => Some(&self.icon_fraqueza_eficiencia),
+            Weakness::RequerInspecao => Some(&self.icon_fraqueza_inspecao),
+            Weakness::DuploSelo | Weakness::ExigeNomeacao | Weakness::ExigeInvocacaoDupla => None,
+        }
+    }
+
     pub fn portrait_for(&self, kind: Kind) -> &Texture2D {
         match kind {
             Kind::Player => &self.portrait_player,
@@ -114,6 +180,9 @@ impl Assets {
             Kind::Zombie => &self.portrait_zombie,
             Kind::Beetle => &self.portrait_beetle,
             Kind::Sphinx => &self.portrait_sphinx,
+            Kind::Guardiao => &self.portrait_guardiao,
+            Kind::Sentinela => &self.portrait_sentinela,
+            Kind::Necroguardiao => &self.portrait_necroguardiao,
         }
     }
 }

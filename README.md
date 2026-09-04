@@ -8,7 +8,7 @@ Reescrito do zero em **Rust** — o jogo original era C + Allegro5, com
 combate por perguntas de matemática. Aqui, cada monstro tem uma fraqueza
 *algorítmica*, e você vence escrevendo um script de pseudo-código que a
 explora dentro de um orçamento de ciclos. Visual redesenhado a partir do
-protótipo em `PIIramid Layout.dc.html` (Claude Design) — ver
+protótipo em `PIIramid Layout.dc.html` — ver
 `C:\docs\Piiramid\Roadmap.md` para o roadmap e as RFCs de próximos passos.
 
 ## Rodando
@@ -141,7 +141,7 @@ cargo test
 ## Assets
 
 O pixel-art de fundo/tileset/sprites/ícones (`assets/*.png`) é gerado por
-código, sem depender de nenhuma IA de imagem externa —
+código, sem nenhum asset externo —
 `tools/gen_assets.py` desenha formas simples em canvas pequeno e faz
 upscale com filtro `NEAREST`, o que dá o visual "pixel art" de forma
 determinística e reproduzível.

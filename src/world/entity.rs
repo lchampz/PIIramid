@@ -29,6 +29,9 @@ pub enum Kind {
     Mummy,
     Beetle,
     Sphinx,
+    Guardiao,
+    Sentinela,
+    Necroguardiao,
 }
 
 pub struct Entity {

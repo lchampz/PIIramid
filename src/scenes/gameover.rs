@@ -6,20 +6,49 @@ use macroquad::prelude::*;
 
 use crate::assets::Assets;
 use crate::config::{HEIGHT, WIDTH};
+use crate::inventory::SaveData;
 use crate::scenes::Transition;
+// RFC-031: `mouse_position()` do macroquad devolve coordenadas da janela
+// real, não do canvas virtual 1280x720 que esta cena desenha -- ver
+// `screen_scale.rs` para o porquê da troca mecânica de nome de função.
+use crate::screen_scale::virtual_mouse_position;
 use crate::ui::button::{Button, ButtonStyle};
+use crate::ui::text::wrap_text;
 use crate::ui::theme;
+
+/// Largura e padding horizontal do card central -- mesmos números que
+/// `intro.rs` usa pro seu próprio card (telas irmãs no mesmo layout),
+/// nomeados aqui pelo mesmo motivo: `draw()` os usa mais de uma vez e
+/// `ui::text::tests` precisa do valor real pra provar que a quebra de
+/// linha do texto de sabor não ultrapassa a borda (RFC-034).
+const CARD_W: f32 = 760.0;
+const CARD_PAD_X: f32 = 44.0;
+/// Largura útil real do texto de sabor dentro do card.
+pub(crate) const FLAVOR_MAX_TEXT_WIDTH: f32 = CARD_W - CARD_PAD_X * 2.0;
+
+/// Texto de sabor da vitória final (Sentença Eterna cumprida) -- extraído
+/// pra constante porque `ui::text::tests` precisa da mesma string que
+/// `draw()` desenha, sem duplicar o literal (RFC-034).
+pub(crate) const FLAVOR_WON: &str = "O ultimo guardiao desmorona. A Sentenca Eterna reconhece sua escrita - a piramide se abre.";
+/// Texto de sabor da derrota -- mesmo motivo de `FLAVOR_WON`.
+pub(crate) const FLAVOR_LOST: &str = "Seu roteiro travou no ultimo ciclo. A piramide guarda seus papiros - e seu corpo.";
 
 pub struct GameOverScene {
     won: bool,
     turns: u32,
     player_hp: i32,
+    /// RFC-028, regra 4: só populado quando `won == true` e a vitória veio
+    /// de `PhaseScene` derrotando o 7o monstro — mesmo texto de feedback
+    /// que `MenuScene` mostra nas vitórias parciais, aqui porque a vitória
+    /// final pula o menu e vai direto para `GoToGameOver`
+    /// (`scenes/phase.rs`).
+    last_drop: Option<String>,
     btn_restart: Button,
     btn_menu: Button,
 }
 
 impl GameOverScene {
-    pub fn new(won: bool, turns: u32, player_hp: i32) -> Self {
+    pub fn new(won: bool, turns: u32, player_hp: i32, last_drop: Option<String>) -> Self {
         let card_w = 760.0;
         let card_x = (WIDTH - card_w) / 2.0;
         let buttons_y = HEIGHT / 2.0 + 170.0;
@@ -27,6 +56,7 @@ impl GameOverScene {
             won,
             turns,
             player_hp,
+            last_drop,
             btn_restart: Button::new(
                 if won { "PROXIMA CAMARA" } else { "TENTAR DE NOVO" },
                 vec2(card_x + 40.0, buttons_y),
@@ -39,15 +69,28 @@ impl GameOverScene {
     }
 
     pub fn update(&mut self) -> Option<Transition> {
-        let mouse: Vec2 = mouse_position().into();
+        let mouse: Vec2 = virtual_mouse_position().into();
         self.btn_restart.update_hover(mouse);
         self.btn_menu.update_hover(mouse);
 
         if self.btn_restart.clicked(mouse) {
-            return Some(Transition::GoToOverworld);
+            // RFC-002: o save já foi persistido antes de chegar aqui
+            // (vitória ou derrota) -- recarregar do disco é o que faz
+            // "tentar de novo"/"proxima camara" manter inventario e
+            // scripts em vez de voltar para vazio.
+            //
+            // B-008: até aqui isto devolvia `GoToOverworld`, que reabria o
+            // mapa livre com os 7 monstros soltos -- ou seja, qualquer
+            // derrota jogava o jogador *fora* da progressão linear da
+            // RFC-005, que é o fluxo padrão do jogo desde então. Como
+            // `save.current_phase` é a fonte de verdade da fase atual,
+            // `GoToPhase` reconstrói exatamente a fase em que o jogador
+            // estava (derrota) ou a próxima (vitória, já incrementada e
+            // salva por `PhaseScene`).
+            return Some(Transition::GoToPhase { save: Box::new(SaveData::load()) });
         }
         if self.btn_menu.clicked(mouse) {
-            return Some(Transition::GoToMenu);
+            return Some(Transition::GoToMenu { last_drop: None });
         }
         if is_key_pressed(KeyCode::Escape) {
             return Some(Transition::Quit);
@@ -65,7 +108,7 @@ impl GameOverScene {
             DrawTextureParams { dest_size: Some(vec2(WIDTH, HEIGHT)), ..Default::default() },
         );
 
-        let card_w = 760.0;
+        let card_w = CARD_W;
         let card_h = 420.0;
         let card_x = (WIDTH - card_w) / 2.0;
         let card_y = HEIGHT / 2.0 - card_h / 2.0 - 40.0;
@@ -78,19 +121,45 @@ impl GameOverScene {
         let subtitle = format!("TURNO {:02}", self.turns);
         draw_text_ex(&subtitle, card_x + 44.0, card_y + 46.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::POEIRA, ..Default::default() });
 
-        let title = if self.won { "CAMARA LIMPA" } else { "VOCE CAIU" };
+        // achado #8 da auditoria de QoL: apos a RFC-005, `won: true` so
+        // chega aqui quando `current_phase >= PHASES.len()` -- vitoria
+        // intermediaria vai direto pro Menu (`phase.rs`), sem passar por
+        // esta tela. O texto antigo ("o corredor segue adiante") falava de
+        // uma vitoria no meio do caminho que nao existe mais -- essa tela
+        // e sempre a Sentenca Eterna encerrada de verdade, fim da piramide.
+        let title = if self.won { "SENTENCA CUMPRIDA" } else { "VOCE CAIU" };
         draw_text_ex(title, card_x + 44.0, card_y + 100.0, TextParams { font: Some(&assets.font_title), font_size: theme::TITLE_LG, color: accent, ..Default::default() });
 
-        let flavor = if self.won {
-            "O monstro desmorona. O corredor segue adiante, mais escuro."
-        } else {
-            "Seu roteiro travou no ultimo ciclo. A piramide guarda seus papiros - e seu corpo."
-        };
+        let flavor = if self.won { FLAVOR_WON } else { FLAVOR_LOST };
         let mut y = card_y + 140.0;
-        for line in wrap_text(flavor, 58) {
-            draw_text_ex(&line, card_x + 44.0, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
+        for line in wrap_text(flavor, &assets.font_body, theme::BODY_LG, FLAVOR_MAX_TEXT_WIDTH) {
+            draw_text_ex(&line, card_x + CARD_PAD_X, y, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_LG, color: theme::PAPIRO, ..Default::default() });
             y += 24.0;
         }
+
+        // RFC-028, regra 4: feedback do despojo do último monstro (só
+        // presente em vitórias, ver doc comment de `last_drop`) -- uma
+        // linha extra logo abaixo do texto de sabor, sem competir com a
+        // grade de estatísticas abaixo.
+        // RFC-029: `last_drop` pode ter uma segunda linha (separada por
+        // `\n`) com a nota da Grade de Eficiência do último monstro —
+        // mesma linha extra que `MenuScene` desenha nas vitórias parciais.
+        // MÉDIO-2 (QA-023-030): `dy` (onde o bloco de sabor+despojo termina
+        // de desenhar) alimenta `sy` abaixo -- antes, `sy` era uma constante
+        // fixa (`card_y + 220.0`) que não sabia quanto texto veio acima, e
+        // com sabor de 2 linhas + despojo+nota de 2 linhas a grade de
+        // estatísticas quase encostava no texto. `.max(card_y + 220.0)`
+        // preserva o visual exato de antes desta correção no caso comum
+        // (derrota, ou vitória sem despojo/nota).
+        let mut dy = y;
+        if let Some(drop) = &self.last_drop {
+            dy += 6.0;
+            for line in drop.split('\n') {
+                draw_text_ex(line, card_x + 44.0, dy, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_MD, color: theme::OURO, ..Default::default() });
+                dy += 22.0;
+            }
+        }
+        let stats_y = (dy + 14.0).max(card_y + 220.0).min(card_y + 340.0);
 
         let stats: [(&str, String); 3] = [
             ("TURNOS", format!("{:02}", self.turns)),
@@ -100,7 +169,7 @@ impl GameOverScene {
         let stat_w = (card_w - 88.0 - 32.0) / 3.0;
         for (i, (label, value)) in stats.iter().enumerate() {
             let sx = card_x + 44.0 + i as f32 * (stat_w + 16.0);
-            let sy = card_y + 220.0;
+            let sy = stats_y;
             draw_rectangle(sx, sy, stat_w, 80.0, theme::TUMBA);
             draw_rectangle_lines(sx, sy, stat_w, 80.0, 2.0, theme::TIJOLO);
             draw_text_ex(label, sx + 12.0, sy + 24.0, TextParams { font: Some(&assets.font_body), font_size: theme::BODY_SM, color: theme::AREIA_ESCURA, ..Default::default() });
@@ -112,20 +181,3 @@ impl GameOverScene {
     }
 }
 
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.len() + word.len() + 1 > max_chars && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}

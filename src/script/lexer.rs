@@ -33,6 +33,12 @@ pub enum TokKind {
     While,
     For,
     In,
+    Func,
+    Invocar,
+    /// `selecionar` (RFC-015) — gramática fixa `selecionar(mochila, onde:
+    /// <expr>, limite: <expr>)`. `onde`/`limite`/`mochila` continuam
+    /// identificadores comuns, só `selecionar` é keyword de verdade.
+    Selecionar,
 
     Plus,
     Minus,
@@ -150,12 +156,33 @@ impl Lexer {
             }
         }
 
-        if !self.at_line_start {
+        // Fecha a última linha lógica com um `Newline` sintético — mas só
+        // se nenhum `(`/`[`/`{` ficou pendente. Enquanto `bracket_depth >
+        // 0` o `Newline` é suprimido em todo o resto do lexer (é o que
+        // permite uma chamada continuar em várias linhas); esse flush de
+        // fim de arquivo era a única exceção que ignorava a mesma regra,
+        // e é isso que causava o bug B-004: um `Newline` fantasma surgia
+        // bem onde o parser esperava o token de fechamento, empurrando o
+        // erro "token inesperado" para a linha física do fim do arquivo
+        // (ou de uma linha em branco deixada por um Enter) em vez de deixar
+        // o parser reconhecer que é um EOF puro e reportar a linha de
+        // abertura do delimitador (ver `Parser::expect_closing`).
+        if !self.at_line_start && self.bracket_depth == 0 {
             self.push(TokKind::Newline);
         }
-        while self.indent_stack.len() > 1 {
-            self.indent_stack.pop();
-            self.push(TokKind::Dedent);
+        // Mesma lógica vale para o `Dedent` de fechamento: só faz sentido
+        // fechar blocos por indentação pendentes se nenhum delimitador
+        // ficou aberto. Se `bracket_depth > 0` no EOF, o script já está
+        // com um erro de sintaxe mais direto (delimitador nunca fechado) —
+        // emitir `Dedent`(s) aqui só faria o parser tropeçar num token
+        // estrutural inesperado (`token inesperado: Dedent`) na mesma linha
+        // inflada, em vez de deixar `Parser::expect_closing` reportar a
+        // linha de abertura do delimitador.
+        if self.bracket_depth == 0 {
+            while self.indent_stack.len() > 1 {
+                self.indent_stack.pop();
+                self.push(TokKind::Dedent);
+            }
         }
         self.push(TokKind::Eof);
 
@@ -264,6 +291,9 @@ impl Lexer {
             "while" => TokKind::While,
             "for" => TokKind::For,
             "in" => TokKind::In,
+            "func" => TokKind::Func,
+            "invocar" => TokKind::Invocar,
+            "selecionar" => TokKind::Selecionar,
             "and" | "e" => TokKind::And,
             "or" | "ou" => TokKind::Or,
             "not" | "nao" => TokKind::Not,
@@ -482,5 +512,28 @@ mod tests {
     fn inconsistent_indent_errors() {
         let err = tokenize("if x:\n    atacar()\n  defender()\n").unwrap_err();
         assert!(err.message.contains("indentacao"));
+    }
+
+    #[test]
+    fn func_keyword_is_recognized() {
+        let toks = kinds("func combo():\n    atacar()\n");
+        assert_eq!(
+            toks,
+            vec![
+                TokKind::Func,
+                TokKind::Ident("combo".into()),
+                TokKind::LParen,
+                TokKind::RParen,
+                TokKind::Colon,
+                TokKind::Newline,
+                TokKind::Indent,
+                TokKind::Ident("atacar".into()),
+                TokKind::LParen,
+                TokKind::RParen,
+                TokKind::Newline,
+                TokKind::Dedent,
+                TokKind::Eof,
+            ]
+        );
     }
 }

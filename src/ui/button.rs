@@ -26,11 +26,15 @@ pub struct Button {
     pub style: ButtonStyle,
     pub font_size: u16,
     pub hovered: bool,
+    /// RFC-009 regra 2: botão desabilitado não responde a clique e é
+    /// desenhado dessaturado — sem isso o botão Executar parecia clicável
+    /// durante `Phase::Executing` mesmo estando fora da lógica de clique.
+    pub disabled: bool,
 }
 
 impl Button {
     pub fn new(label: &str, position: Vec2, size: Vec2, style: ButtonStyle, font_size: u16) -> Self {
-        Button { label: label.to_string(), position, size, style, font_size, hovered: false }
+        Button { label: label.to_string(), position, size, style, font_size, hovered: false, disabled: false }
     }
 
     pub fn rect(&self) -> Rect {
@@ -42,7 +46,7 @@ impl Button {
     }
 
     pub fn clicked(&self, mouse: Vec2) -> bool {
-        self.hovered && is_mouse_button_pressed(MouseButton::Left) && self.rect().contains(mouse)
+        !self.disabled && self.hovered && is_mouse_button_pressed(MouseButton::Left) && self.rect().contains(mouse)
     }
 
     fn colors(&self) -> (Color, Color, Color) {
@@ -81,6 +85,13 @@ impl Button {
 
     pub fn draw(&self, font: &Font) {
         let (bg, border, text_color) = self.colors();
+        // RFC-009 regra 2: dessatura em vez de inventar uma 5ª variante —
+        // mesma cor de fundo/borda/texto da variante original, alfa a ~60%.
+        let (bg, border, text_color) = if self.disabled {
+            (fade(bg), fade(border), fade(text_color))
+        } else {
+            (bg, border, text_color)
+        };
         let border_w = if self.style == ButtonStyle::Ghost { 2.0 } else { 4.0 };
 
         if self.style != ButtonStyle::Ghost {
@@ -102,5 +113,24 @@ impl Button {
         let x = self.position.x + (self.size.x - dims.width) / 2.0;
         let y = self.position.y + (self.size.y + dims.height) / 2.0;
         draw_text_ex(&self.label, x, y, TextParams { font: Some(font), font_size: self.font_size, color: text_color, ..Default::default() });
+    }
+}
+
+/// reduz o alfa em ~40% mantendo o RGB — é o "filtro" de estado
+/// desabilitado citado na RFC-009, aplicado igual às 4 variantes.
+fn fade(c: Color) -> Color {
+    Color::new(c.r, c.g, c.b, c.a * 0.6)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_button_never_reports_clicked() {
+        let mut b = Button::new("X", vec2(0.0, 0.0), vec2(10.0, 10.0), ButtonStyle::Primary, 10);
+        b.disabled = true;
+        b.hovered = true;
+        assert!(!b.clicked(vec2(5.0, 5.0)));
     }
 }

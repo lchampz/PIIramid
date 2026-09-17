@@ -19,6 +19,11 @@ pub enum Expr {
     Call(String, Vec<Expr>),
     Unary(UnaryOp, Box<Expr>),
     Binary(Box<Expr>, BinOp, Box<Expr>),
+    /// `selecionar(mochila, onde: <predicate>, limite: <limit>)` (RFC-015).
+    /// `mochila` não é armazenada: é a única fonte suportada (não-objetivo
+    /// 3 da RFC), fixa pela gramática. Sempre resolve para um único
+    /// `Value::Item` ou `Value::Nil` — nunca uma coleção (não-objetivo 2).
+    Select { predicate: Box<Expr>, limit: Box<Expr> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,4 +62,13 @@ pub enum StmtKind {
     If { cond: Expr, then_branch: Vec<Stmt>, else_branch: Option<Vec<Stmt>> },
     While { cond: Expr, body: Vec<Stmt> },
     For { var: String, from: Expr, to: Expr, body: Vec<Stmt> },
+    /// `func nome():` / `func nome() {` — bloco nomeado sem parâmetro
+    /// (RFC-006). Declarar não executa nada; só a invocação (`Expr::Call`
+    /// pelo mesmo `nome`) roda o corpo e cobra ciclo.
+    FuncDef { name: String, body: Vec<Stmt> },
+    /// `invocar nome:` / `invocar nome {` — bloco executado imediatamente
+    /// com um sub-orçamento de ciclos próprio (RFC-004). Diferente de
+    /// `FuncDef`, não é uma declaração: `name` é só rótulo narrativo/de
+    /// log, nunca vira algo chamável nem acessível como variável.
+    Invoke { name: String, body: Vec<Stmt> },
 }

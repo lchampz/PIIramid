@@ -6,6 +6,12 @@ description = "Um jogo onde voce derrota monstros escrevendo o algoritmo certo, 
 
 [dependencies]
 macroquad = "0.4"
+# RFC-002: primeira dependência do projeto além de macroquad. Só
+# `src/inventory.rs` importa serde/serde_json — `src/script/` continua
+# livre de qualquer coisa além de `std`. Justificativa completa em
+# `RFCs/RFC-002-inventario-tecnico.md`.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 opt-level = 3

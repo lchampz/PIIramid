@@ -57,6 +57,27 @@ P = {
     "sphinx_body": (214, 176, 96, 255),
     "sphinx_dark": (160, 124, 58, 255),
     "sphinx_gold": (240, 196, 25, 255),
+    # RFC-008 -- Guardiao das Duas Chaves: pedra-bronze do "boss
+    # cumulativo", mais escuro que a sphinx (tom mais antigo, mais
+    # imponente) com a cabeca em dourado pra ecoar a dupla chave do adorno.
+    "guardiao_body": (94, 78, 58, 255),
+    "guardiao_dark": (58, 46, 34, 255),
+    "guardiao_head": (206, 170, 88, 255),
+    # RFC-012 -- Sentinela das Palavras Verdadeiras: tom pedra-ardosia fria
+    # (diferente do bronze/dourado quente dos outros cinco) para destacar
+    # que a fraqueza dele e sobre forma/nomeacao, nao sobre elemento ou
+    # estado -- o adorno (headdress_nome_verdadeiro) reforca com uma
+    # tabuleta gravada em vez de chifre/coroa.
+    "sentinela_body": (70, 84, 92, 255),
+    "sentinela_dark": (40, 50, 56, 255),
+    "sentinela_head": (176, 200, 204, 255),
+    # RFC-017 -- Necroguardiao (provisorio): fecha o ciclo de `invocar`
+    # (RFC-004), entao o tom puxa pro roxo-necromante (diferente do
+    # bronze/pedra-ardosia dos outros seis), com a cabeca em verde-espectral
+    # pra ecoar os dois espiritos convocados do adorno.
+    "necroguardiao_body": (72, 52, 84, 255),
+    "necroguardiao_dark": (42, 28, 52, 255),
+    "necroguardiao_head": (140, 200, 150, 255),
     "clear": (0, 0, 0, 0),
 }
 
@@ -294,6 +315,41 @@ def headdress_antennae(d, cx, top):
     d.line([(cx + body_w_g, top), (cx + body_w_g + 4, top - 3)], fill=P["ink"])
 
 
+def headdress_duplo_selo(d, cx, top):
+    """Duas chaves cruzadas sobre a cabeca (RFC-008): a fraqueza do
+    Guardiao e a composicao das duas condicoes que os monstros anteriores
+    cobravam isoladas (guarda do escaravelho, inspecao da esfinge) -- o
+    adorno mostra literalmente as "duas chaves" se cruzando, com o selo
+    (ponto turquesa) no encontro delas."""
+    d.line([(cx - 5, top), (cx - 1, top - 6)], fill=P["gold"])
+    d.line([(cx + 1, top - 6), (cx + 5, top)], fill=P["gold_dark"])
+    d.ellipse([cx - 6, top - 1, cx - 4, top + 1], outline=P["gold"])
+    d.ellipse([cx + 4, top - 1, cx + 6, top + 1], outline=P["gold_dark"])
+    d.point([(cx, top - 6)], fill=P["turquoise"])
+
+
+def headdress_nome_verdadeiro(d, cx, top):
+    """Tabuleta gravada sobre a cabeca (RFC-012): a fraqueza do Sentinela
+    julga se o golpe foi *nomeado* numa funcao -- o adorno mostra
+    literalmente uma tabuleta com um traco (o "nome" gravado nela), em vez
+    de um elemento ou par de simbolos como os monstros anteriores."""
+    d.rectangle([cx - 4, top - 6, cx + 4, top - 1], fill=P["stone"])
+    d.rectangle([cx - 4, top - 6, cx + 4, top - 5], fill=P["stone_dark"])
+    d.line([(cx - 2, top - 3), (cx + 2, top - 3)], fill=P["turquoise"])
+
+
+def headdress_invocacao_dupla(d, cx, top):
+    """Dois cranios espectrais flutuando sobre a cabeca (RFC-017): a
+    fraqueza do Necroguardiao so cede depois de 2 invocacoes no turno -- o
+    adorno mostra literalmente os dois espiritos convocados, um de cada
+    lado, em vez de um par de simbolos cruzados (Aker) ou uma tabuleta
+    (Apagado)."""
+    d.ellipse([cx - 7, top - 6, cx - 3, top - 2], outline=P["turquoise"])
+    d.ellipse([cx + 3, top - 6, cx + 7, top - 2], outline=P["turquoise"])
+    d.point([(cx - 5, top - 4)], fill=P["turquoise"])
+    d.point([(cx + 5, top - 4)], fill=P["turquoise"])
+
+
 body_w_g = 6
 
 
@@ -340,6 +396,37 @@ def gen_sphinx():
     save(build_sheet(frame), "monsters", "sphinx.png")
 
 
+def gen_guardiao():
+    # RFC-008: "boss cumulativo" depois dos 4 -- corpo maior (size_h=8,
+    # o mais alto do bestiario) e quadrado (round_body=False, como a
+    # esfinge, pra leitura de "estatua imponente"), reaproveitando
+    # draw_creature como os outros dois monstros nao-humanoides.
+    def frame(d, direction, f):
+        draw_creature(d, direction, f, P["guardiao_body"], P["guardiao_dark"], P["guardiao_head"], size_h=8, legs=4, headdress=headdress_duplo_selo, round_body=False)
+    save(build_sheet(frame), "monsters", "guardiao.png")
+
+
+def gen_sentinela():
+    # RFC-012: mesmo padrao dos monstros nao-humanoides anteriores
+    # (draw_creature) -- corpo medio (size_h=7, entre beetle e guardiao),
+    # quadrado (round_body=False, "estatua" como esfinge/guardiao) para
+    # ler como guardiao de ritual, com a tabuleta no lugar do
+    # chifre/coroa.
+    def frame(d, direction, f):
+        draw_creature(d, direction, f, P["sentinela_body"], P["sentinela_dark"], P["sentinela_head"], size_h=7, legs=4, headdress=headdress_nome_verdadeiro, round_body=False)
+    save(build_sheet(frame), "monsters", "sentinela.png")
+
+
+def gen_necroguardiao():
+    # RFC-017: setimo monstro, mesmo padrao dos nao-humanoides anteriores
+    # (draw_creature) -- corpo medio (size_h=7, igual ao sentinela),
+    # quadrado (round_body=False, "estatua" como os demais guardioes) com
+    # o adorno de dois espiritos convocados no lugar de chifre/tabuleta.
+    def frame(d, direction, f):
+        draw_creature(d, direction, f, P["necroguardiao_body"], P["necroguardiao_dark"], P["necroguardiao_head"], size_h=7, legs=4, headdress=headdress_invocacao_dupla, round_body=False)
+    save(build_sheet(frame), "monsters", "necroguardiao.png")
+
+
 # ------------------------------------------------------------- retratos --
 
 def gen_portrait(name, draw_fn, bg=P["stone_mid"]):
@@ -353,7 +440,7 @@ def gen_portrait(name, draw_fn, bg=P["stone_mid"]):
     inner = canvas(16, 16)
     di = ImageDraw.Draw(inner)
     draw_fn(di)
-    inner = inner.resize((36, 36), Image.NEAREST)
+    inner = inner.resize((36, 36), Image.NEAREST) # type: ignore
     img.paste(inner, (6, 8), inner)
     save(up(img, 4), "portraits", f"{name}.png")
 
@@ -364,6 +451,9 @@ def gen_portraits():
     gen_portrait("zombie", lambda d: draw_humanoid(d, DOWN, 0, P["zombie"], P["zombie_dark"], P["zombie_rag"], P["stone_shadow"], headwear_hood), bg=P["stone_shadow"])
     gen_portrait("beetle", lambda d: draw_creature(d, DOWN, 0, P["beetle"], P["beetle_dark"], P["beetle_light"], headdress=headdress_antennae), bg=P["stone_dark"])
     gen_portrait("sphinx", lambda d: draw_creature(d, DOWN, 0, P["sphinx_body"], P["sphinx_dark"], P["sphinx_gold"], headdress=headdress_sphinx, round_body=False), bg=P["sand_shadow"])
+    gen_portrait("guardiao", lambda d: draw_creature(d, DOWN, 0, P["guardiao_body"], P["guardiao_dark"], P["guardiao_head"], size_h=8, headdress=headdress_duplo_selo, round_body=False), bg=P["stone_shadow"])
+    gen_portrait("sentinela", lambda d: draw_creature(d, DOWN, 0, P["sentinela_body"], P["sentinela_dark"], P["sentinela_head"], size_h=7, headdress=headdress_nome_verdadeiro, round_body=False), bg=P["stone_shadow"])
+    gen_portrait("necroguardiao", lambda d: draw_creature(d, DOWN, 0, P["necroguardiao_body"], P["necroguardiao_dark"], P["necroguardiao_head"], size_h=7, headdress=headdress_invocacao_dupla, round_body=False), bg=P["stone_shadow"])
 
 
 # ------------------------------------------------------------------ icons --
@@ -409,6 +499,57 @@ def gen_icon_pocao():
     save(up(img, 4), "icons", "pocao.png")
 
 
+# RFC-013 -- selo partido, compartilhado entre postura_aberta e
+# fraqueza_guarda: mesma geometria de "escudo quebrado" usada nas duas
+# familias, para nao duplicar o desenho (ver ASSETS-especificacoes.md).
+def draw_selo_partido(d):
+    d.polygon([(0, 1), (4, 1), (4, 4), (2, 6), (0, 4)], fill=P["stone"])
+    d.polygon([(4, 2), (7, 2), (7, 5), (4, 7), (4, 4)], fill=P["stone_dark"])
+    d.line([(4, 1), (4, 7)], fill=P["blood"], width=1)
+    d.point([(6, 6)], fill=P["stone_dark"])
+
+
+def gen_icon_postura():
+    def guarda(d):
+        d.polygon([(1, 1), (6, 1), (6, 4), (3, 7), (1, 4)], fill=P["stone"])
+        d.rectangle([1, 1, 6, 2], fill=P["gold"])
+        d.point([(3, 3), (3, 4)], fill=P["gold_dark"])
+        d.line([(1, 1), (6, 1)], fill=P["linen"])
+
+    for name, fn in (("guarda", guarda), ("aberta", draw_selo_partido)):
+        img = canvas(8, 8)
+        fn(ImageDraw.Draw(img))
+        save(up(img, 4), "icons", f"postura_{name}.png")
+
+
+def gen_icon_fraqueza():
+    def elemento(d):
+        d.polygon([(2, 7), (6, 7), (4, 1)], fill=P["gold"])
+        d.polygon([(3, 6), (5, 6), (4, 3)], fill=P["sun_core"])
+        d.point([(3, 7), (5, 7)], fill=P["stone_dark"])
+
+    def eficiencia(d):
+        d.polygon([(1, 1), (6, 1), (4, 4), (6, 7), (1, 7), (3, 4)], outline=P["stone_dark"])
+        d.polygon([(2, 6), (5, 6), (4, 5), (3, 5)], fill=P["sand_light"])
+        d.point([(4, 4)], fill=P["sand_light"])
+
+    def inspecao(d):
+        d.line([(1, 4), (4, 2), (7, 4)], fill=P["ink"], width=1)
+        d.line([(2, 5), (6, 5)], fill=P["ink"], width=1)
+        d.point([(4, 3)], fill=P["linen"])
+
+    variants = {
+        "elemento": elemento,
+        "guarda": draw_selo_partido,
+        "eficiencia": eficiencia,
+        "inspecao": inspecao,
+    }
+    for name, fn in variants.items():
+        img = canvas(8, 8)
+        fn(ImageDraw.Draw(img))
+        save(up(img, 4), "icons", f"fraqueza_{name}.png")
+
+
 # ------------------------------------------------------------------- ui --
 # Nao ha mais gen_button(): os botoes agora sao desenhados em Rust
 # (ui/button.rs) com retangulo+borda, sem depender de textura, para bater
@@ -446,11 +587,16 @@ def main():
     gen_mummy()
     gen_beetle()
     gen_sphinx()
+    gen_guardiao()
+    gen_sentinela()
+    gen_necroguardiao()
     gen_portraits()
     gen_icon_espada()
     gen_icon_magia()
     gen_icon_escudo()
     gen_icon_pocao()
+    gen_icon_postura()
+    gen_icon_fraqueza()
     gen_logo()
 
 
